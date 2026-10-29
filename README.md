@@ -257,6 +257,25 @@ The desktop build compiles the same sources with `desktop/nxshim.cpp` standing i
 
 Built with libnx, SDL2 (ttf, image), libcurl and nlohmann/json. The PC version uses the [Inter](https://github.com/rsms/inter) font (SIL OFL 1.1).
 
+## Credits and licenses
+
+**Data and pictures**
+
+- Game data, item icons, map renders and map plans: [tarkov.dev](https://tarkov.dev) and the contributors credited there. The game's images and icons are the property of Battlestate Games.
+- Quest guides and their pictures: the [Escape from Tarkov Wiki](https://escapefromtarkov.fandom.com) on Fandom, used under [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/). The text is shortened and reformatted for the app, and these adapted guides (`wiki.json` and `wiki/` on the `data` branch) are shared under the same license. The app shows the credit under every guide.
+- Player profiles: [tarkov.dev/players](https://tarkov.dev/players). Progress sync: the [TarkovTracker](https://tarkovtracker.org) API.
+
+**Software**
+
+- [libnx](https://github.com/switchbrew/libnx) (ISC) and the devkitPro toolchain, for the Switch build.
+- [SDL2](https://libsdl.org), SDL2_ttf and SDL2_image (zlib license).
+- [libcurl](https://curl.se) (curl license), [nlohmann/json](https://github.com/nlohmann/json) (MIT, included in `include/nlohmann`).
+- Portions of this software are copyright © The [FreeType](https://freetype.org) Project. All rights reserved.
+- This software is based in part on the work of the Independent JPEG Group (libjpeg-turbo), and uses libpng.
+- [Inter](https://github.com/rsms/inter) font by The Inter Project Authors, SIL Open Font License 1.1 (`desktop/font-LICENSE.txt`), in the PC version.
+
+The PC downloads include `THIRD-PARTY-NOTICES.txt` with these notices.
+
 ---
 
 <sub>Not affiliated with Battlestate Games, tarkov.dev, TarkovTracker or the Escape from Tarkov Wiki. Escape From Tarkov is a trademark of Battlestate Games.</sub>

@@ -27,7 +27,7 @@ jobs:
         run: |
           P=TarkovHideout-linux
           mkdir -p $P
-          cp build-desktop/TarkovHideout desktop/font.otf desktop/icon.png desktop/font-LICENSE.txt $P/
+          cp build-desktop/TarkovHideout desktop/font.otf desktop/icon.png desktop/font-LICENSE.txt desktop/THIRD-PARTY-NOTICES.txt $P/
           cp desktop/README.txt $P/README.txt
           cp desktop/TarkovHideout.desktop $P/
           git clone -q --depth 1 -b data "https://github.com/${{ github.repository }}" $P/data && rm -rf $P/data/.git ||
@@ -71,7 +71,7 @@ jobs:
         run: |
           P=TarkovHideout-windows
           mkdir -p $P
-          cp build-desktop/TarkovHideout.exe desktop/font.otf desktop/icon.png desktop/font-LICENSE.txt $P/
+          cp build-desktop/TarkovHideout.exe desktop/font.otf desktop/icon.png desktop/font-LICENSE.txt desktop/THIRD-PARTY-NOTICES.txt $P/
           cp desktop/README.txt $P/README.txt
           # Every DLL the program loads from MSYS2, including the ones SDL_image opens at run time.
           for f in $P/TarkovHideout.exe /ucrt64/bin/SDL2_image.dll; do
