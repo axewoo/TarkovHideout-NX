@@ -308,8 +308,22 @@ bool parseWiki(const std::string &text, std::map<std::string, std::string> &out)
     out.clear();
     const json pages = j.value("pages", json::object());
     for (auto &[k, v] : pages.items())
-        if (v.is_string())
-            out[k] = v.get<std::string>();
+        if (v.is_string()) {
+            // Older data kept tab-only lines from wiki tables; drop them and collapse blank runs.
+            std::string src = v.get<std::string>(), clean, line;
+            std::istringstream ls(src);
+            int blank = 0;
+            while (std::getline(ls, line)) {
+                size_t b = line.find_first_not_of(" \t");
+                line = b == std::string::npos ? "" : line.substr(b);
+                blank = line.empty() ? blank + 1 : 0;
+                if (blank < 2)
+                    clean += line + "\n";
+            }
+            while (!clean.empty() && clean.back() == '\n')
+                clean.pop_back();
+            out[k] = clean;
+        }
     return true;
 }
 

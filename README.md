@@ -52,7 +52,7 @@ licensed CC BY-SA.
 
 ## Profile
 
-The Profile tab shows the public snapshot tarkov.dev keeps of your account.
+The Profile tab is labelled with your player name and game mode, and shows the public snapshot tarkov.dev keeps of your account.
 Search your in-game name on [tarkov.dev/players](https://tarkov.dev/players),
 open your profile and enter the number at the end of the link in the app. The
 snapshot refreshes when a profile is looked up on tarkov.dev, so it can lag
@@ -87,6 +87,7 @@ behind the game by a few days.
 | Database | A | Open quest, show key lock on the map |
 | Quest page | Up / Down, A | Pick an objective or item, show it on the map |
 | Quest page | Right stick, ZL / ZR | Scroll the guide |
+| Quest page | Y | Cycle guide + details, guide only, details only |
 | Profile | A / X | Refresh / change profile ID |
 
 ## Data

@@ -319,6 +319,8 @@ def clean_extract(text):
     out = [p for i, p in enumerate(out)
            if not (p.startswith("## ") and (i + 1 == len(out) or out[i + 1].startswith("## ")))]
     text = "\n\n".join(p for p in out if p)
+    # Table remnants leave tab-only lines; strip them before collapsing blank runs.
+    text = re.sub(r"[ \t\u200e]+$", "", re.sub(r"^[ \t]+", "", text, flags=re.M), flags=re.M)
     text = re.sub(r"\n{3,}", "\n\n", text)
     if len(text) > WIKI_MAX:
         text = text[:WIKI_MAX].rsplit("\n", 1)[0] + "\n\n(Continued on the wiki.)"

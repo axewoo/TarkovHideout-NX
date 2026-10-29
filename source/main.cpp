@@ -31,9 +31,9 @@ enum DbSection { DB_QUESTS, DB_AMMO, DB_KEYS, DB_ITEMS, DB_COUNT };
 static const char *kDbNames[DB_COUNT] = {"Quests", "Ammo", "Keys", "Items"};
 static const int kMaxIconPages = 8;
 
-static const int kTop = 116;
+static const int kTop = 68;
 static const int kBottom = 664;
-static const int kMapTop = 100;
+static const int kMapTop = 50;
 static const int kMapBottom = 676;
 
 static const SDL_Color kMarkerColor[MK_COUNT] = {col::good, col::info, col::accent, col::violet, col::bad};
@@ -266,6 +266,7 @@ private:
     void filterDb();
     void openQuestPage(int idx);
     void buildQuestRows(const Quest &q);
+    void layoutQuest();
     void showPins(const std::string &label, const std::vector<Pin> &pins);
     std::string itemName(const std::string &id) const;
     int itemIcon(const std::string &id) const;
@@ -344,6 +345,7 @@ private:
     int openQuest = -1;
     std::vector<std::string> questText;
     int textScroll = 0;
+    int questView = 0; // 0 guide + details, 1 guide only, 2 details only
     std::vector<QRow> qrows;
     int qrowSel = -1;
     int qrowScroll = 0;
@@ -1367,14 +1369,8 @@ void App::inputDatabase() {
 void App::openQuestPage(int idx) {
     ensureWiki();
     openQuest = idx;
-    const Quest &q = db.quests[idx];
-    auto it = wiki.find(q.wiki);
-    std::string text = it != wiki.end() ? it->second : "";
-    questText = text.empty() ? std::vector<std::string>{"No wiki guide cached for this quest.",
-                                                          "Download the latest data in Settings to get the guides."}
-                             : ui.wrap(text, FS_SMALL, 560);
     textScroll = 0;
-    buildQuestRows(q);
+    layoutQuest();
     qrowSel = -1;
     for (int i = 0; i < (int)qrows.size(); i++)
         if (qrows[i].kind == QRow::OBJ) {
@@ -1384,9 +1380,20 @@ void App::openQuestPage(int idx) {
     qrowScroll = 0;
 }
 
+// Wraps the guide and details for the current view mode's panel widths.
+void App::layoutQuest() {
+    const Quest &q = db.quests[openQuest];
+    auto it = wiki.find(q.wiki);
+    std::string text = it != wiki.end() ? it->second : "";
+    questText = text.empty() ? std::vector<std::string>{"No wiki guide cached for this quest.",
+                                                          "Download the latest data in Settings to get the guides."}
+                             : ui.wrap(text, FS_SMALL, questView == 1 ? 1200 : 560);
+    buildQuestRows(q);
+}
+
 void App::buildQuestRows(const Quest &q) {
     qrows.clear();
-    const int w = 540;
+    const int w = questView == 2 ? 1160 : 540;
     auto head = [&](const std::string &t) {
         QRow r{QRow::HEAD};
         r.text = t;
@@ -1464,11 +1471,24 @@ void App::inputQuest() {
         openQuest = -1;
         return;
     }
-    // Right stick or ZL/ZR scrolls the wiki text.
+    if (in.pressed(HidNpadButton_Y)) {
+        // Keep roughly the same reading position when the guide rewraps.
+        float frac = questText.empty() ? 0 : (float)textScroll / questText.size();
+        questView = (questView + 1) % 3;
+        layoutQuest();
+        textScroll = (int)(frac * questText.size());
+    }
+    // Right stick or ZL/ZR scrolls the wiki text (the d-pad too when only the guide is shown).
     int visible = (kBottom - kTop - 110) / 26;
     int maxScroll = std::max(0, (int)questText.size() - visible);
     static float acc = 0;
     acc += -in.ry * 0.6f;
+    if (questView == 1) {
+        if (in.up())
+            acc -= 3;
+        if (in.downDir())
+            acc += 3;
+    }
     if (in.pressed(HidNpadButton_ZR))
         acc += visible - 2;
     if (in.pressed(HidNpadButton_ZL))
@@ -1481,7 +1501,7 @@ void App::inputQuest() {
     for (int i = 0; i < (int)qrows.size(); i++)
         if (qrows[i].kind == QRow::OBJ || qrows[i].kind == QRow::ITEM)
             sel.push_back(i);
-    if (!sel.empty() && (in.up() || in.downDir())) {
+    if (questView != 1 && !sel.empty() && (in.up() || in.downDir())) {
         int pos = std::find(sel.begin(), sel.end(), qrowSel) - sel.begin();
         if (pos >= (int)sel.size())
             pos = 0;
@@ -1489,7 +1509,7 @@ void App::inputQuest() {
             pos = std::clamp(pos + (in.downDir() ? 1 : -1), 0, (int)sel.size() - 1);
         qrowSel = sel[pos];
     }
-    if (in.pressed(HidNpadButton_A) && qrowSel >= 0 && qrowSel < (int)qrows.size()) {
+    if (questView != 1 && in.pressed(HidNpadButton_A) && qrowSel >= 0 && qrowSel < (int)qrows.size()) {
         const QRow &r = qrows[qrowSel];
         if (r.kind == QRow::OBJ) {
             const Objective &o = q.objectives[r.obj];
@@ -1530,30 +1550,33 @@ int App::drawBadge(int x, int y, const std::string &s, SDL_Color c) {
 }
 
 void App::drawHeader() {
-    ui.vgradient(0, 0, 1280, 100, col::bgTop, col::bg);
-    ui.fill(0, 0, 1280, 3, col::accent);
-    ui.text(28, 12, "TARKOV HIDEOUT", FS_TITLE, col::accent);
+    // One compact bar: tabs only. The Profile tab carries the player name and game mode.
+    ui.fill(0, 0, 1280, 46, col::bgTop);
+    ui.fill(0, 0, 1280, 2, col::accent);
     bool pve = st.mode == "pve";
-    int bx = 1252 - ui.measure(pve ? "PVE" : "PVP", FS_SMALL) - 14;
-    drawBadge(bx, 18, pve ? "PVE" : "PVP", pve ? col::good : col::bad);
+    const char *mode = pve ? "PVE" : "PVP";
     std::string who = !profile.empty() ? profile.nickname : st.account;
-    if (!who.empty())
-        ui.textRight(bx - 16, 18, who, FS_SMALL, col::dim);
+    if (who.empty())
+        who = kTabNames[TAB_PROFILE];
 
-    int x = 72;
-    ui.hint(24, 62, "L", "");
+    int x = 64;
+    ui.hint(20, 10, "L", "");
     for (int i = 0; i < TAB_COUNT; i++) {
         bool on = i == tab;
-        int w = ui.measure(kTabNames[i], FS_SMALL) + 28;
+        std::string label = i == TAB_PROFILE ? who : kTabNames[i];
+        int lw = ui.measure(label, FS_SMALL);
+        int w = lw + 28 + (i == TAB_PROFILE ? ui.measure(mode, FS_SMALL) + 22 : 0);
         if (on) {
-            ui.fill(x, 56, w, 40, col::panel);
-            ui.fill(x, 93, w, 3, col::accent);
+            ui.fill(x, 4, w, 42, col::panel);
+            ui.fill(x, 43, w, 3, col::accent);
         }
-        ui.text(x + 14, 64, kTabNames[i], FS_SMALL, on ? col::text : col::dim);
+        ui.text(x + 14, 12, label, FS_SMALL, on ? col::text : col::dim);
+        if (i == TAB_PROFILE)
+            drawBadge(x + 22 + lw, 11, mode, pve ? col::good : col::bad);
         x += w + 2;
     }
-    ui.hint(x + 10, 62, "R", "");
-    ui.fill(0, 96, 1280, 1, col::line);
+    ui.hint(x + 10, 10, "R", "");
+    ui.fill(0, 46, 1280, 1, col::line);
 }
 
 void App::drawFooter(const std::vector<std::pair<std::string, std::string>> &hints) {
@@ -2148,25 +2171,34 @@ void App::drawQuest() {
         badge("Lightkeeper", col::violet);
 
     int top = kTop + 60;
-    // Left: wiki guide.
-    ui.fill(16, top, 608, kBottom - top, col::panel);
-    int lines = (kBottom - top - 50) / 26;
-    int y = top + 12;
-    for (int i = 0; i < lines && textScroll + i < (int)questText.size(); i++) {
-        const std::string &l = questText[textScroll + i];
-        if (l.rfind("## ", 0) == 0)
-            ui.text(32, y, l.substr(3), FS_SMALL, col::accent);
-        else if (l.rfind("### ", 0) == 0)
-            ui.text(32, y, l.substr(4), FS_SMALL, col::warn);
-        else
-            ui.text(32, y, l, FS_SMALL, col::text);
-        y += 26;
+    int y = top;
+    // Left (or full width): wiki guide.
+    if (questView != 2) {
+        int gw = questView == 1 ? 1248 : 608;
+        ui.fill(16, top, gw, kBottom - top, col::panel);
+        int lines = (kBottom - top - 50) / 26;
+        y = top + 12;
+        for (int i = 0; i < lines && textScroll + i < (int)questText.size(); i++) {
+            const std::string &l = questText[textScroll + i];
+            if (l.rfind("## ", 0) == 0)
+                ui.text(32, y, l.substr(3), FS_SMALL, col::accent);
+            else if (l.rfind("### ", 0) == 0)
+                ui.text(32, y, l.substr(4), FS_SMALL, col::warn);
+            else
+                ui.text(32, y, l, FS_SMALL, col::text);
+            y += 26;
+        }
+        drawScrollbar(16 + gw - 8, top + 8, lines * 26, questText.size(), lines, textScroll);
+        ui.text(32, kBottom - 30, "Guide: Escape from Tarkov Wiki, CC BY-SA", FS_SMALL, col::faint);
     }
-    drawScrollbar(616, top + 8, lines * 26, questText.size(), lines, textScroll);
-    ui.text(32, kBottom - 30, "Guide: Escape from Tarkov Wiki, CC BY-SA", FS_SMALL, col::faint);
 
-    // Right: structured details.
-    int rx = 640, rw = 624;
+    // Right (or full width): structured details.
+    static const char *kViewNames[3] = {"Guide + details", "Guide only", "Details only"};
+    if (questView == 1) {
+        drawFooter({{"B", "Back"}, {"Y", kViewNames[2]}, {"^/v", "Scroll"}, {"ZL/ZR", "Page"}});
+        return;
+    }
+    int rx = questView == 2 ? 16 : 640, rw = questView == 2 ? 1248 : 624;
     ui.fill(rx, top, rw, kBottom - top, col::panel);
     SDL_Rect clipR{rx, top, rw, kBottom - top};
     // Keep the selected row in view.
@@ -2208,7 +2240,7 @@ void App::drawQuest() {
                 ui.fill(rx + 8, y, rw - 16, r.h - 2, col::panelHi);
             ui.icon(itemIcon(r.item), rx + 24, y + 2, 34);
             std::string t = itemName(r.item) + (r.count > 1 ? "  x" + groupDigits(r.count) : "");
-            int w = ui.text(rx + 68, y + 6, t, FS_SMALL, col::text, 380);
+            int w = ui.text(rx + 68, y + 6, t, FS_SMALL, col::text, rw - 244);
             if (!r.text.empty())
                 ui.text(rx + 80 + w, y + 6, r.text, FS_SMALL, col::dim, rw - 100 - w - 60);
             break;
@@ -2286,12 +2318,13 @@ void App::drawQuest() {
 
     bool hasPins = qrowSel >= 0 && qrows[qrowSel].kind == QRow::OBJ && !q.objectives[qrows[qrowSel].obj].pins.empty();
     bool onItem = qrowSel >= 0 && qrows[qrowSel].kind == QRow::ITEM;
-    std::vector<std::pair<std::string, std::string>> hints = {{"B", "Back"}};
+    std::vector<std::pair<std::string, std::string>> hints = {{"B", "Back"}, {"Y", kViewNames[(questView + 1) % 3]}};
     if (hasPins)
         hints.push_back({"A", "Show on map"});
     if (onItem)
         hints.push_back({"A", "Item info"});
-    hints.push_back({"R-stick", "Scroll guide"});
+    if (questView == 0)
+        hints.push_back({"R-stick", "Scroll guide"});
     drawFooter(hints);
 }
 
