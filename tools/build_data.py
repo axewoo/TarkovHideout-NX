@@ -186,6 +186,9 @@ def craft_items(res, entries):
         if not isinstance(e, dict):
             continue
         name, short, iid = res.item(e.get("item"))
+        attrs = e.get("attributes")
+        if isinstance(attrs, dict) and attrs.get("tool"):
+            short += " (tool)"
         out.append({"n": name, "s": short, "c": count_of(e)})
     return out
 
@@ -249,9 +252,6 @@ def build_mode(mode):
         stations.append({"id": st.get("id"), "name": st.get("name") or st.get("id"), "levels": levels})
     stations.sort(key=lambda s: s["name"])
 
-    sample = records(crafts_data)[:2]
-    print(f"  crafts endpoint type {type(crafts_data).__name__}, {len(records(crafts_data))} records, "
-          f"{len(crafts)} from hideout levels; sample: {json.dumps(sample)[:900]}")
     for c in records(crafts_data):
         if not c.get("id"):
             continue
@@ -266,7 +266,8 @@ def build_mode(mode):
             "lvl": int(level or c.get("level") or 0),
             "dur": int(c.get("duration") or 0),
             "req": craft_items(res, c.get("requiredItems")),
-            "rew": craft_items(res, c.get("rewardItems")),
+            # json.tarkov.dev has a single productItem; older shapes used rewardItems.
+            "rew": craft_items(res, c.get("rewardItems") or ([c["productItem"]] if c.get("productItem") else [])),
         })
     craft_out.sort(key=lambda c: (res.station(c["st"]), c["lvl"], c["rew"][0]["n"] if c["rew"] else ""))
 
