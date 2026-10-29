@@ -12,6 +12,7 @@ android {
     // CI runners provide their newest NDK here; otherwise the Android plugin's default is used.
     if (System.getenv('ANDROID_NDK_LATEST_HOME')) {
         ndkPath System.getenv('ANDROID_NDK_LATEST_HOME')
+        ndkVersion new File(System.getenv('ANDROID_NDK_LATEST_HOME')).name
     }
 
     defaultConfig {
