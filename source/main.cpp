@@ -221,6 +221,7 @@ private:
     void loadIcons(const std::string &root);
     void loadMaps();
     bool downloadData(bool quiet);
+    void downloadPictures();
     void syncTracker();
     void editToken();
     void editProfileId();
@@ -581,6 +582,52 @@ bool App::downloadData(bool quiet) {
     loadData();
     setStatus("Hideout data updated (" + data.generated + ")", col::good);
     return true;
+}
+
+// Saves every wiki guide picture the app does not have yet, for use without internet.
+void App::downloadPictures() {
+    ensureWiki();
+    std::set<std::string> paths;
+    for (const auto &kv : wiki) {
+        const std::string &t = kv.second;
+        for (size_t at = t.find("@img "); at != std::string::npos; at = t.find("@img ", at + 5)) {
+            size_t end = t.find(' ', at + 5);
+            if (end != std::string::npos)
+                paths.insert(t.substr(at + 5, end - at - 5));
+        }
+    }
+    std::vector<std::string> todo;
+    for (const std::string &p : paths)
+        if (!fileExists("romfs:/" + p) && !fileExists(std::string(APP_DIR "/") + p))
+            todo.push_back(p);
+    if (todo.empty()) {
+        setStatus(paths.empty() ? "No wiki pictures in the data yet" :
+                  "All " + std::to_string(paths.size()) + " wiki pictures are already saved", col::good);
+        return;
+    }
+    int done = 0, failed = 0;
+    for (const std::string &p : todo) {
+        if (done % 8 == 0)
+            busy("Downloading wiki pictures " + std::to_string(done) + " / " + std::to_string(todo.size()) + "...");
+        HttpResult r = httpGet(DATA_URL + p);
+        std::string sd = std::string(APP_DIR "/") + p;
+        makeParents(sd);
+        if (r.ok && r.status == 200 && writeFile(sd, r.body)) {
+            done++;
+            continue;
+        }
+        if (!r.ok || r.status == 429) {
+            // Offline, or GitHub asks to slow down: stop and keep what is saved.
+            setStatus("Stopped after " + std::to_string(done) + " pictures: " +
+                      (r.ok ? "GitHub is rate limiting, try again later" : r.error), col::bad);
+            return;
+        }
+        failed++;
+        done++;
+    }
+    dropWikiPictures();
+    setStatus("Saved " + std::to_string(done - failed) + " wiki pictures" +
+              (failed ? " (" + std::to_string(failed) + " missing on the server)" : ""), failed ? col::warn : col::good);
 }
 
 void App::syncTracker() {
@@ -1288,7 +1335,8 @@ void App::inputProfile() {
         skillScroll = std::min(std::max(0, n - 12), skillScroll + 1);
 }
 
-enum SettingRow { SET_TOKEN, SET_SYNC, SET_SYNC_LAUNCH, SET_PROFILE, SET_MODE, SET_DOWNLOAD, SET_RESET, SET_COUNT };
+enum SettingRow { SET_TOKEN, SET_SYNC, SET_SYNC_LAUNCH, SET_PROFILE, SET_MODE, SET_DOWNLOAD, SET_PICTURES, SET_RESET,
+                  SET_COUNT };
 
 void App::inputSettings() {
     if (in.up()) {
@@ -1320,6 +1368,7 @@ void App::inputSettings() {
                   " (your token decides the mode when you sync)");
         break;
     case SET_DOWNLOAD: downloadData(false); break;
+    case SET_PICTURES: downloadPictures(); break;
     case SET_RESET:
         if (!confirmReset) {
             confirmReset = true;
@@ -2891,6 +2940,7 @@ void App::drawSettings() {
         {"tarkov.dev profile ID", st.profileId.empty() ? "not set" : st.profileId},
         {"Game mode", st.mode == "pve" ? "PVE" : "PVP"},
         {"Download latest data, icons and maps", data.empty() ? "no data" : data.generated},
+        {"Download all wiki pictures", "for offline guides"},
         {confirmReset ? "Clear local progress? Press A again" : "Clear local progress and timers", ""},
     };
     settingsList.clamp(SET_COUNT, SET_COUNT);
@@ -2902,6 +2952,18 @@ void App::drawSettings() {
             ui.fill(16, y, 4, 46, col::accent);
         ui.text(36, y + 10, rows[i].label, FS_BODY, i == SET_RESET && confirmReset ? col::warn : col::text, 500);
         ui.textRight(816, y + 13, rows[i].value, FS_SMALL, col::dim);
+    }
+    if (settingsList.sel == SET_PICTURES) {
+        int ny = kTop + SET_COUNT * 52 + 8;
+        const char *warn[] = {
+            "Heads up: this makes about a thousand requests in a row. They go to this app's",
+            "GitHub copy of the pictures, never to the wiki, so Fandom does not see them.",
+            "GitHub can still rate limit you for a while if you repeat it often.",
+        };
+        for (const char *w : warn) {
+            ui.text(36, ny, w, FS_SMALL, col::bad, 780);
+            ny += 24;
+        }
     }
     int x = 860, y = kTop;
     ui.fill(x, y, 404, kBottom - y, col::panel);
