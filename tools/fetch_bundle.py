@@ -6,6 +6,7 @@ Usage: fetch_bundle.py OUT_DIR
 import json
 import os
 import sys
+import urllib.error
 import urllib.request
 
 BASE = "https://raw.githubusercontent.com/axewoo/TarkovHideout-NX/data/"
@@ -27,12 +28,22 @@ def main():
     images = set()
     for mode in ("pve", "pvp"):
         get(f"hideout-{mode}.json", out)
+        get(f"db-{mode}.json", out)
         maps = json.loads(get(f"maps-{mode}.json", out))
         images.update(m["img"] for m in maps["maps"])
-    get("icons.png", out)
+    get("wiki.json", out)
+    pages = 0
+    while True:
+        try:
+            get(f"icons-{pages}.jpg", out)
+        except urllib.error.HTTPError as e:
+            if e.code != 404 or pages == 0:
+                raise
+            break
+        pages += 1
     for img in sorted(images):
         get(img, out)
-    print(f"bundled hideout data, icons and {len(images)} map images")
+    print(f"bundled hideout data, database, wiki, {pages} icon pages and {len(images)} map images")
 
 
 if __name__ == "__main__":

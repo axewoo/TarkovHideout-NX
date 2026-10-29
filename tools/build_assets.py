@@ -25,6 +25,8 @@ import build_data as b
 
 ICON_PX = 64
 ATLAS_COLS = 32
+PAGE_ICONS = ATLAS_COLS * ATLAS_COLS
+CELL_RGB = (36, 37, 32)  # col::cell in the app
 MAP_PX = 2048
 MAPS_META = "https://raw.githubusercontent.com/the-hideout/tarkov-dev/main/src/data/maps.json"
 
@@ -57,32 +59,41 @@ def fetch_bytes(url):
     raise RuntimeError(f"failed to fetch {url}: {last}")
 
 
-def build_icons(used, out):
-    """Writes icons.png and returns {item id: atlas index}."""
-    ids = sorted(iid for iid, (link, _) in used.items() if link)
-    rows = max(1, math.ceil(len(ids) / ATLAS_COLS))
-    atlas = Image.new("RGBA", (ATLAS_COLS * ICON_PX, rows * ICON_PX), (0, 0, 0, 0))
+def build_icons(links, out):
+    """Writes icons-<page>.jpg atlases and returns {item id: global icon index}.
+
+    Each page is ATLAS_COLS x ATLAS_COLS cells, so index // PAGE_ICONS is the
+    page. Icons are flattened onto the app's cell colour, which lets the pages
+    be JPEGs at a fraction of the PNG size.
+    """
+    ids = sorted(iid for iid, link in links.items() if link)
     index = {}
+    pages = []
     failed = 0
     for iid in ids:
-        link = used[iid][0]
         try:
-            img = Image.open(io.BytesIO(fetch_bytes(link))).convert("RGBA")
+            img = Image.open(io.BytesIO(fetch_bytes(links[iid]))).convert("RGBA")
         except Exception as e:  # noqa: BLE001
             failed += 1
             print(f"  icon {iid} failed: {e}", file=sys.stderr)
             continue
         img.thumbnail((ICON_PX, ICON_PX), Image.LANCZOS)
         n = len(index)
-        x = (n % ATLAS_COLS) * ICON_PX + (ICON_PX - img.width) // 2
-        y = (n // ATLAS_COLS) * ICON_PX + (ICON_PX - img.height) // 2
-        atlas.paste(img, (x, y), img)
+        page, cell = divmod(n, PAGE_ICONS)
+        if page == len(pages):
+            pages.append(Image.new("RGB", (ATLAS_COLS * ICON_PX, ATLAS_COLS * ICON_PX), CELL_RGB))
+        x = (cell % ATLAS_COLS) * ICON_PX + (ICON_PX - img.width) // 2
+        y = (cell // ATLAS_COLS) * ICON_PX + (ICON_PX - img.height) // 2
+        pages[page].paste(img, (x, y), img)
         index[iid] = n
-    used_rows = max(1, math.ceil(len(index) / ATLAS_COLS))
-    atlas = atlas.crop((0, 0, ATLAS_COLS * ICON_PX, used_rows * ICON_PX))
-    path = os.path.join(out, "icons.png")
-    atlas.save(path, optimize=True)
-    print(f"wrote {path}: {len(index)} icons, {failed} failed ({os.path.getsize(path) // 1024} KB)")
+    total = 0
+    for i, page in enumerate(pages):
+        rows = math.ceil(min(PAGE_ICONS, len(index) - i * PAGE_ICONS) / ATLAS_COLS)
+        page = page.crop((0, 0, ATLAS_COLS * ICON_PX, rows * ICON_PX))
+        path = os.path.join(out, f"icons-{i}.jpg")
+        page.save(path, quality=90, optimize=True)
+        total += os.path.getsize(path)
+    print(f"wrote {len(pages)} icon pages: {len(index)} icons, {failed} failed ({total // 1024} KB)")
     return index
 
 
@@ -236,14 +247,43 @@ def markers(gm, proj, rect, mobs):
     return out
 
 
-def build_maps(mode, out):
+class MapProjector:
+    """Converts game positions on any map to image coordinates of that map's picture."""
+
+    def __init__(self, game_maps, meta_by_key):
+        self.by_id = {}
+        for gm in game_maps:
+            key = gm.get("normalizedName")
+            meta = meta_by_key.get(MAP_ALIASES.get(key, key))
+            if key in SKIP_MAPS or not meta:
+                continue
+            proj = Projection(meta)
+            self.by_id[gm.get("id")] = (key, proj, proj.rect(meta.get("svgBounds") or meta["bounds"]))
+
+    def uv(self, map_id, pos):
+        entry = self.by_id.get(map_id)
+        if not entry or not isinstance(pos, dict) or "x" not in pos or "z" not in pos:
+            return None
+        key, proj, (x0, y0, x1, y1) = entry
+        px, py = proj.point(pos["x"], pos["z"])
+        u, v = (px - x0) / (x1 - x0), (py - y0) / (y1 - y0)
+        if -0.02 <= u <= 1.02 and -0.02 <= v <= 1.02:
+            return key, round(min(max(u, 0), 1), 4), round(min(max(v, 0), 1), 4)
+        return None
+
+
+def load_maps(mode):
+    data = b.fetch_translated(mode, "maps") or {}
+    game_maps = b.records(data.get("maps") if isinstance(data, dict) else data)
+    return data, game_maps, interactive_maps()
+
+
+def build_maps(mode, out, loaded=None):
     name = "pvp" if mode == "regular" else mode
     maps_dir = os.path.join(out, "maps")
     os.makedirs(maps_dir, exist_ok=True)
-    data = b.fetch_translated(mode, "maps") or {}
+    data, game_maps, meta_by_key = loaded or load_maps(mode)
     mobs = data.get("mobs") if isinstance(data, dict) else None
-    game_maps = b.records(data.get("maps") if isinstance(data, dict) else data)
-    meta_by_key = interactive_maps()
 
     entries = []
     for gm in game_maps:

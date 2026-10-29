@@ -312,20 +312,43 @@ def main():
         data, mode_used = build_mode(mode)
         used.update(mode_used)
         built.append((mode, data))
+    dbs = []
     if args.assets:
         import build_assets  # needs Pillow and cairosvg, only installed in the data workflow
-        atlas = build_assets.build_icons(used, args.out)
+        import build_db
+        links = {iid: link for iid, (link, _) in used.items()}
+        for mode, _ in built:
+            loaded = build_assets.load_maps(mode)
+            build_assets.build_maps(mode, args.out, loaded)
+            db, db_links = build_db.build(mode, loaded)
+            links.update(db_links)
+            dbs.append((mode, db))
+        atlas = build_assets.build_icons(links, args.out)
         for _, data in built:
             for iid, meta in data["items"].items():
                 if iid in atlas:
                     meta["ic"] = atlas[iid]
-        for mode, _ in built:
-            build_assets.build_maps(mode, args.out)
+        titles = set()
+        for _, db in dbs:
+            for iid, rec in db["items"].items():
+                if iid in atlas:
+                    rec["ic"] = atlas[iid]
+            titles.update(t["wiki"] for t in db["tasks"])
+        wiki = build_db.fetch_wiki(titles)
+        with open(os.path.join(args.out, "wiki.json"), "w", encoding="utf-8") as f:
+            json.dump({"source": "Escape from Tarkov Wiki (escapefromtarkov.fandom.com), CC BY-SA 3.0",
+                       "pages": wiki}, f, ensure_ascii=False, separators=(",", ":"))
     for mode, data in built:
         name = "pvp" if mode == "regular" else mode
         path = os.path.join(args.out, f"hideout-{name}.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+        print(f"wrote {path} ({os.path.getsize(path) // 1024} KB)")
+    for mode, db in dbs:
+        name = "pvp" if mode == "regular" else mode
+        path = os.path.join(args.out, f"db-{name}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(db, f, ensure_ascii=False, separators=(",", ":"))
         print(f"wrote {path} ({os.path.getsize(path) // 1024} KB)")
 
 

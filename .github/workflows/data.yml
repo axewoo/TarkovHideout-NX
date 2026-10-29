@@ -34,13 +34,13 @@ jobs:
 
       - name: Publish to the data branch
         # The app reads raw.githubusercontent.com/<repo>/data/{hideout,maps}-<mode>.json,
-        # icons.png and maps/*.jpg.
+        # db-<mode>.json, wiki.json, icons-<page>.jpg and maps/*.jpg.
         # Each run replaces the branch so it never accumulates history.
         run: |
           cd out
           git init -q -b data
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add *.json icons.png maps
+          git add *.json icons-*.jpg maps
           git commit -qm "Hideout data $(date -u +%F)"
           git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" data
