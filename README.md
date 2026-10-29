@@ -3,11 +3,11 @@
 # Tarkov Hideout for Switch, PC and Android
 
 **An offline Escape From Tarkov companion for Nintendo Switch homebrew, Windows, Linux and Android tablets.**
-Hideout planner, craft timers, sharp interactive maps, an ammo chart and a quest database, in your hands between raids or on your second screen while you play.
+Hideout planner, craft timers, sharp interactive maps, an ammo chart, a Kappa tracker and a quest database, in 13 color themes, in your hands between raids or on your second screen while you play.
 
-![Maps, ammo chart, quest guide and hideout stations](docs/screenshots/hero.jpg)
+![Maps, ammo chart, quest guide, Kappa tracker, theme picker and hideout stations](docs/screenshots/hero.jpg)
 
-[Install](#install) · [PC](#pc-second-screen) · [Android](#android-tablets-and-chromebooks) · [Hideout](#hideout) · [Maps](#maps) · [Ammo](#ammo) · [Database](#database) · [Profile and sync](#profile-and-tarkovtracker-sync) · [Controls](#controls) · [Building](#building)
+[Install](#install) · [PC](#pc-second-screen) · [Android](#android-tablets-and-chromebooks) · [Hideout](#hideout) · [Maps](#maps) · [Ammo](#ammo) · [Database](#database) · [Kappa](#kappa) · [Themes](#themes) · [Profile and sync](#profile-and-tarkovtracker-sync) · [Controls](#controls) · [Building](#building)
 
 </div>
 
@@ -20,6 +20,9 @@ Hideout planner, craft timers, sharp interactive maps, an ammo chart and a quest
 - **16 maps built from the game's own renders**, sharp up to 16x zoom, with extracts, transits, boss spawns and every floor of the multi-level maps.
 - **An ammo tab** with an eft-ammo style damage vs penetration chart. Pin rounds to compare them.
 - **Quest database** with wiki guides, pictures included, next to objectives, map pins and rewards.
+- **Kappa tracker** for every Collector item, saved as you find them, with Kappa quest progress.
+- **13 color themes** with a live-preview picker: OLED, Catppuccin, Nord, Dracula, Gruvbox, Light and more.
+- **TarkovTracker sync that never loses your work**: it merges with the hideout levels you set in the app.
 - **Works fully offline.** Data, icons, maps and wiki pictures ship inside the app and refresh daily when you're online.
 - **Runs on your PC too.** The same app for Windows and Linux, in a resizable window for a second screen, with mouse, keyboard or controller.
 - **And on Android tablets and Chromebooks**, in landscape with touch controls.

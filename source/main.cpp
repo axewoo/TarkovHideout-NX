@@ -206,6 +206,143 @@ private:
     int netFails = 0;
 };
 
+// Reads and decodes map pieces on a worker thread, so panning never waits on the SD card or the
+// JPEG decoder; the main thread only uploads finished pictures to the GPU.
+class Decoder {
+public:
+    enum State { NONE, QUEUED, READY, MISSING };
+
+    void start(Uint32 format) {
+        pixelFormat = format;
+        lock = SDL_CreateMutex();
+        wake = SDL_CreateCond();
+        if (lock && wake)
+            thread = SDL_CreateThreadWithStackSize(run, "decode", 256 * 1024, this);
+    }
+
+    void stop() {
+        if (!thread)
+            return;
+        SDL_LockMutex(lock);
+        quit = true;
+        SDL_CondSignal(wake);
+        SDL_UnlockMutex(lock);
+        SDL_WaitThread(thread, nullptr);
+        thread = nullptr;
+        clear();
+    }
+
+    // Queues a piece; the newest requests are decoded first since they are what is on screen.
+    State request(const std::string &path) {
+        if (!thread)
+            return MISSING;
+        SDL_LockMutex(lock);
+        State st;
+        auto it = states.find(path);
+        if (it != states.end()) {
+            st = it->second;
+        } else {
+            st = states[path] = QUEUED;
+            todo.push_front(path);
+            while (todo.size() > 24) {
+                states.erase(todo.back());
+                todo.pop_back();
+            }
+            SDL_CondSignal(wake);
+        }
+        SDL_UnlockMutex(lock);
+        return st;
+    }
+
+    // Takes one decoded piece, if any; the caller owns the surface.
+    bool take(std::string &path, SDL_Surface *&surf) {
+        if (!thread)
+            return false;
+        SDL_LockMutex(lock);
+        bool any = !done.empty();
+        if (any) {
+            path = done.front().first;
+            surf = done.front().second;
+            done.pop_front();
+            states.erase(path);
+        }
+        SDL_UnlockMutex(lock);
+        return any;
+    }
+
+    // Forgets a piece reported MISSING, so it is looked for again (after a download).
+    void forget(const std::string &path) {
+        if (!thread)
+            return;
+        SDL_LockMutex(lock);
+        states.erase(path);
+        SDL_UnlockMutex(lock);
+    }
+
+    void clear() {
+        if (!lock)
+            return;
+        SDL_LockMutex(lock);
+        todo.clear();
+        states.clear();
+        for (auto &d : done)
+            SDL_FreeSurface(d.second);
+        done.clear();
+        SDL_UnlockMutex(lock);
+    }
+
+private:
+    static int run(void *self) {
+        static_cast<Decoder *>(self)->loop();
+        return 0;
+    }
+
+    void loop() {
+        SDL_LockMutex(lock);
+        while (!quit) {
+            if (todo.empty()) {
+                SDL_CondWait(wake, lock);
+                continue;
+            }
+            std::string path = todo.front();
+            todo.pop_front();
+            SDL_UnlockMutex(lock);
+            std::string file = ROMFS_ROOT + path;
+            if (!fileExists(file))
+                file = std::string(APP_DIR "/") + path;
+            SDL_Surface *surf = nullptr;
+            if (fileExists(file)) {
+                if (SDL_Surface *raw = IMG_Load(file.c_str())) {
+                    surf = SDL_ConvertSurfaceFormat(raw, pixelFormat, 0);
+                    SDL_FreeSurface(raw);
+                }
+            }
+            SDL_LockMutex(lock);
+            auto it = states.find(path);
+            if (it == states.end()) {
+                // Cleared while decoding.
+                if (surf)
+                    SDL_FreeSurface(surf);
+            } else if (surf) {
+                it->second = READY;
+                done.push_back({path, surf});
+            } else {
+                it->second = MISSING;
+            }
+        }
+        SDL_UnlockMutex(lock);
+    }
+
+    SDL_mutex *lock = nullptr;
+    SDL_cond *wake = nullptr;
+    SDL_Thread *thread = nullptr;
+    std::atomic<bool> quit{false};
+    Uint32 pixelFormat = SDL_PIXELFORMAT_ARGB8888;
+    std::deque<std::string> todo;
+    std::deque<std::pair<std::string, SDL_Surface *>> done;
+    std::map<std::string, State> states;
+};
+
 static std::string groupDigits(int64_t n) {
     std::string s = std::to_string(n);
     for (int i = (int)s.size() - 3; i > 0; i -= 3)
@@ -523,7 +660,9 @@ private:
     std::map<std::string, Chunk> mapChunks;
     std::set<std::string> chunkMissing;
     Fetcher fetcher;  // pieces and pictures that are neither bundled nor saved yet
-    int mapFrame = 0, chunkLoads = 0;
+    Decoder decoder;  // map pieces read and decoded off the main thread
+    void pumpChunks();
+    int mapFrame = 0;
     uint32_t mapFrameStart = 0;
     bool mapFailed = false;
     bool mapPending = false;  // the map image is downloading
@@ -620,6 +759,7 @@ bool App::init() {
     in.init();
     if (!ui.init())
         return false;
+    decoder.start(ui.textureFormat());
 
     loadState(STATE_PATH, st);
     applyTheme(themeIndex(st.theme));
@@ -642,6 +782,7 @@ void App::shutdown() {
     save();
     freeMapTiles();
     fetcher.stop();
+    decoder.stop();
     ui.shutdown();
     netExit();
     socketExit();
@@ -1381,48 +1522,47 @@ static const int kMaxChunks = nxDesktop() ? 160 : 32;
 
 // A sharp piece from the SD card or romfs, downloaded in the background when neither has it.
 // Returns nullptr when it is not ready yet (try again next frame) or does not exist.
+// A sharp piece if it is ready. Otherwise it is queued for the decoder (or a download when neither
+// romfs nor the SD card has it) and nullptr is returned; the overview shows until it arrives.
 SDL_Texture *App::mapChunk(const std::string &path) {
     auto it = mapChunks.find(path);
     if (it != mapChunks.end()) {
         it->second.used = mapFrame;
         return it->second.tex;
     }
-    if (chunkMissing.count(path) || (chunkLoads > 0 && SDL_GetTicks() - mapFrameStart > 12))
+    if (chunkMissing.count(path) || fetcher.state(path) == Fetcher::PENDING)
         return nullptr;
-    // Still downloading: checked before the file system, which is slow on the SD card.
-    Fetcher::State fetch = fetcher.state(path);
-    if (fetch == Fetcher::PENDING)
-        return nullptr;
-    chunkLoads++;
-    std::string file = std::string(APP_DIR "/") + path;
-    if (fetch != Fetcher::DONE) {
-        file = ROMFS_ROOT + path;
-        if (!fileExists(file)) {
-            file = std::string(APP_DIR "/") + path;
-            if (!fileExists(file)) {
-                if (fetcher.request(path) == Fetcher::FAILED)
-                    chunkMissing.insert(path);
-                return nullptr;
-            }
+    if (decoder.request(path) == Decoder::MISSING) {
+        decoder.forget(path);
+        if (fetcher.state(path) == Fetcher::DONE || fetcher.request(path) == Fetcher::FAILED)
+            chunkMissing.insert(path);
+    }
+    return nullptr;
+}
+
+// Uploads decoded pieces: one per frame, more while the frame is still young, so a burst after
+// zooming spreads over several frames.
+void App::pumpChunks() {
+    std::string path;
+    SDL_Surface *surf;
+    for (int n = 0; n < 4 && (n == 0 || SDL_GetTicks() - mapFrameStart < 4) && decoder.take(path, surf); n++) {
+        SDL_Texture *tex = ui.texture(surf);
+        SDL_FreeSurface(surf);
+        if (!tex)
+            continue;
+        while ((int)mapChunks.size() >= kMaxChunks) {
+            auto old = mapChunks.end();
+            for (auto c = mapChunks.begin(); c != mapChunks.end(); ++c)
+                if (old == mapChunks.end() || c->second.used < old->second.used)
+                    old = c;
+            SDL_DestroyTexture(old->second.tex);
+            mapChunks.erase(old);
         }
+        auto prev = mapChunks.find(path);
+        if (prev != mapChunks.end())
+            SDL_DestroyTexture(prev->second.tex);
+        mapChunks[path] = {tex, mapFrame};
     }
-    SDL_Texture *tex = ui.loadImage(file);
-    if (!tex) {
-        chunkMissing.insert(path);
-        return nullptr;
-    }
-    while ((int)mapChunks.size() >= kMaxChunks) {
-        auto old = mapChunks.end();
-        for (auto c = mapChunks.begin(); c != mapChunks.end(); ++c)
-            if (c->second.used < mapFrame && (old == mapChunks.end() || c->second.used < old->second.used))
-                old = c;
-        if (old == mapChunks.end())
-            break;
-        SDL_DestroyTexture(old->second.tex);
-        mapChunks.erase(old);
-    }
-    mapChunks[path] = {tex, mapFrame};
-    return tex;
 }
 
 void App::freeChunks() {
@@ -1431,6 +1571,7 @@ void App::freeChunks() {
     mapChunks.clear();
     chunkMissing.clear();
     fetcher.reset();
+    decoder.clear();
 }
 
 void App::freeMapTiles() {
@@ -2938,8 +3079,8 @@ void App::drawMaps() {
     ui.clip(&clipR);
     ui.fill(0, top, 1280, bottom - top, col::bg);
     mapFrame++;
-    chunkLoads = 0;
     mapFrameStart = SDL_GetTicks();
+    pumpChunks();
     if (ensureMapTexture()) {
         bool plan = mapPlan && !m->alt.empty();
         drawTiles(mapTiles, mapImgW, mapImgH, ox, oy, dw, dh, top, bottom);

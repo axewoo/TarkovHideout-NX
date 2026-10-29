@@ -59,6 +59,9 @@ public:
 
     // Images. Icon atlases are pages of 32 x 32 cells of 64 px; index / 1024 is the page.
     SDL_Texture *loadImage(const std::string &path, int *w = nullptr, int *h = nullptr);
+    // A texture from a surface already in textureFormat(), as a background decoder prepares them.
+    SDL_Texture *texture(SDL_Surface *surf);
+    Uint32 textureFormat() const;
     // Loads a large image as a grid of tile x tile textures (row-major), for images past the GPU's size limit.
     bool loadImageTiles(const std::string &path, int tile, std::vector<SDL_Texture *> &out, int &w, int &h);
     void setIcons(const std::vector<SDL_Texture *> &pages);
@@ -88,6 +91,7 @@ private:
     };
     Cached *get(const std::string &s, FontSize fs, SDL_Color c);
     std::string fit(const std::string &s, FontSize fs, int maxW);
+    std::string cutToFit(const std::string &s, FontSize fs, int maxW);
     void updateScale();
 
     std::vector<SDL_Texture *> icons;
@@ -100,5 +104,7 @@ private:
     float scale = 1;
     int lineH[FS_COUNT] = {};
     std::unordered_map<std::string, Cached> cache;
+    std::unordered_map<std::string, int> widths;        // measure() results
+    std::unordered_map<std::string, std::string> fits;  // fit() results
     unsigned frame = 0;
 };
