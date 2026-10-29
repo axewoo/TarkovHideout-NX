@@ -7,10 +7,16 @@ the Escape from Tarkov wiki's plain-text extracts (CC BY-SA), fetched in
 batches and stored in wiki.json.
 """
 
+import hashlib
+import io
 import json
+import os
 import re
 import sys
 import urllib.parse
+from html.parser import HTMLParser
+
+from PIL import Image
 
 import build_assets as a
 import build_data as b
@@ -18,6 +24,9 @@ import build_data as b
 WIKI_API = "https://escapefromtarkov.fandom.com/api.php"
 WIKI_SKIP = {"objectives", "rewards", "gallery", "references", "video guides", "videos", "see also"}
 WIKI_MAX = 9000
+WIKI_IMG_W = 560      # guide images are stored at most this wide
+WIKI_IMG_MIN_W = 150  # smaller pictures are item icons
+WIKI_IMG_MAX = 12     # per page
 DESC_MAX = 220
 PINS_MAX = 16
 
@@ -300,21 +309,117 @@ def wiki_title(link):
     return urllib.parse.unquote(link.split("/wiki/", 1)[1]).replace("_", " ")
 
 
-def clean_extract(text):
-    """Keeps the intro and the guide-like sections, marking headings with '## '."""
+class WikiImages(HTMLParser):
+    """Collects guide pictures from a parsed wiki page, keyed by the heading they sit under.
+
+    Infobox and navbox tables are skipped (banner, icons), as are pictures
+    narrower than WIKI_IMG_MIN_W, which are item icons next to the text.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.section = ""
+        self.heading = None
+        self.table_depth = 0
+        self.images = {}  # section title -> [(key, url, caption)]
+        self.seen = set()
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == "table":
+            self.table_depth += 1
+        elif tag in ("h2", "h3"):
+            self.heading = ""
+        elif tag == "img" and not self.table_depth and self.heading is None:
+            src = a.get("data-src") or a.get("src") or ""
+            key = a.get("data-image-key")
+            try:
+                width = int(a.get("width") or 0)
+            except ValueError:
+                width = 0
+            if not key or "static.wikia.nocookie.net" not in src or width < WIKI_IMG_MIN_W or key in self.seen:
+                return
+            self.seen.add(key)
+            base = re.sub(r"/revision/latest.*", "/revision/latest", src)
+            cb = re.search(r"cb=(\d+)", src)
+            url = f"{base}/scale-to-width-down/{WIKI_IMG_W}" + (f"?cb={cb.group(1)}" if cb else "")
+            alt = (a.get("alt") or "").strip()
+            self.images.setdefault(self.section, []).append((key, url, alt if " " in alt else ""))
+
+    def handle_endtag(self, tag):
+        if tag == "table":
+            self.table_depth = max(0, self.table_depth - 1)
+        elif tag in ("h2", "h3") and self.heading is not None:
+            self.section = re.sub(r"\s+", " ", self.heading).replace("[edit]", "").strip()
+            self.heading = None
+
+    def handle_data(self, data):
+        if self.heading is not None:
+            self.heading += data
+
+
+def wiki_image_lines(images, out):
+    """Downloads guide pictures as JPEGs under out/wiki/ and returns the '@img' lines for them."""
+    lines = []
+    for key, url, caption in images:
+        name = "wiki/" + hashlib.sha1(key.encode()).hexdigest()[:16] + ".jpg"
+        path = os.path.join(out, name)
+        try:
+            if not os.path.exists(path):
+                img = Image.open(io.BytesIO(a.fetch_bytes(url))).convert("RGBA")
+                if img.width > WIKI_IMG_W:
+                    img = img.resize((WIKI_IMG_W, round(img.height * WIKI_IMG_W / img.width)), Image.LANCZOS)
+                flat = Image.new("RGB", img.size, a.CELL_RGB)
+                flat.paste(img, (0, 0), img)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                flat.save(path, quality=80, optimize=True)
+            with Image.open(path) as im:
+                w, h = im.size
+        except Exception as e:  # noqa: BLE001 - pictures are optional
+            print(f"  wiki image {key} failed: {e}", file=sys.stderr)
+            continue
+        lines.append(f"@img {name} {w} {h}")
+        if caption:
+            lines.append(f"@cap {caption}")
+    return lines
+
+
+def clean_extract(text, images=None, img_dir=None):
+    """Keeps the intro and the guide-like sections, marking headings with '## '.
+
+    With images ({section title: pictures}) and img_dir, each kept section ends
+    with '@img path w h' lines (and '@cap caption'), which the app draws inline.
+    The wiki's Gallery section is kept for its pictures only.
+    """
+    images = images or {}
+    budget = [WIKI_IMG_MAX]
+
+    def pics(title):
+        if img_dir is None or not budget[0]:
+            return ""
+        chosen = images.get(title, [])[:budget[0]]
+        budget[0] -= len(chosen)
+        return "\n".join(wiki_image_lines(chosen, img_dir))
+
     parts = re.split(r"\n*^(={2,4})\s*(.+?)\s*\1\s*$\n*", text or "", flags=re.M)
-    out = [parts[0].strip()]
+    blocks = [parts[0].strip(), pics("")]
     skip = False
     for i in range(1, len(parts) - 2, 3):
         level, title, body = len(parts[i]), parts[i + 1].strip(), parts[i + 2].strip()
         if level == 2:
             skip = title.lower() in WIKI_SKIP
         if skip:
+            if title.lower() == "gallery":
+                gallery = pics(title)
+                if gallery:
+                    blocks += ["## Gallery", gallery]
             continue
+        body = "\n\n".join(p for p in (body, pics(title)) if p)
         if body or level == 2:
-            out.append(("## " if level == 2 else "### ") + title)
+            blocks.append(("## " if level == 2 else "### ") + title)
         if body:
-            out.append(body)
+            blocks.append(body)
+    out = blocks
     # Drop headings whose section turned out empty.
     out = [p for i, p in enumerate(out)
            if not (p.startswith("## ") and (i + 1 == len(out) or out[i + 1].startswith("## ")))]
@@ -327,7 +432,19 @@ def clean_extract(text):
     return text
 
 
-def fetch_wiki_page(title):
+def fetch_wiki_images(title):
+    q = urllib.parse.urlencode({"action": "parse", "page": title, "prop": "text", "redirects": 1, "format": "json"})
+    try:
+        data = json.loads(a.fetch_bytes(f"{WIKI_API}?{q}"))
+        parser = WikiImages()
+        parser.feed(((data.get("parse") or {}).get("text") or {}).get("*") or "")
+        return parser.images
+    except Exception as e:  # noqa: BLE001 - pictures are optional
+        print(f"  wiki images {title} failed: {e}", file=sys.stderr)
+        return {}
+
+
+def fetch_wiki_page(title, out=None):
     # TextExtracts only returns one whole-page extract per request.
     q = urllib.parse.urlencode({"action": "query", "prop": "extracts", "explaintext": 1, "redirects": 1,
                                 "format": "json", "titles": title})
@@ -337,19 +454,22 @@ def fetch_wiki_page(title):
         print(f"  wiki {title} failed: {e}", file=sys.stderr)
         return title, ""
     for page in ((data.get("query") or {}).get("pages") or {}).values():
-        return title, clean_extract(page.get("extract"))
+        images = fetch_wiki_images(title) if out else None
+        return title, clean_extract(page.get("extract"), images, out)
     return title, ""
 
 
-def fetch_wiki(titles):
-    """Returns {title: cleaned text} for wiki pages."""
+def fetch_wiki(titles, out=None):
+    """Returns {title: cleaned text} for wiki pages; with out, guide pictures are saved under out/wiki/."""
     from concurrent.futures import ThreadPoolExecutor
 
     titles = sorted(set(t for t in titles if t))
     with ThreadPoolExecutor(max_workers=4) as pool:
-        out = {t: text for t, text in pool.map(fetch_wiki_page, titles) if text}
-    print(f"wiki: {len(out)} pages for {len(titles)} titles ({sum(map(len, out.values())) // 1024} KB)")
-    return out
+        pages = {t: text for t, text in pool.map(lambda t: fetch_wiki_page(t, out), titles) if text}
+    n_img = sum(text.count("\n@img ") + text.startswith("@img ") for text in pages.values())
+    print(f"wiki: {len(pages)} pages for {len(titles)} titles ({sum(map(len, pages.values())) // 1024} KB), "
+          f"{n_img} pictures")
+    return pages
 
 
 def build(mode, maps_loaded):

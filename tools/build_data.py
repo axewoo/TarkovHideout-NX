@@ -334,7 +334,7 @@ def main():
                 if iid in atlas:
                     rec["ic"] = atlas[iid]
             titles.update(t["wiki"] for t in db["tasks"])
-        wiki = build_db.fetch_wiki(titles)
+        wiki = build_db.fetch_wiki(titles, args.out)
         with open(os.path.join(args.out, "wiki.json"), "w", encoding="utf-8") as f:
             json.dump({"source": "Escape from Tarkov Wiki (escapefromtarkov.fandom.com), CC BY-SA 3.0",
                        "pages": wiki}, f, ensure_ascii=False, separators=(",", ":"))
