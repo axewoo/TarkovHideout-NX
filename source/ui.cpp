@@ -61,6 +61,8 @@ void Ui::updateScale() {
     for (auto &[k, c] : cache)
         SDL_DestroyTexture(c.tex);
     cache.clear();
+    widths.clear();
+    fits.clear();
     for (auto &f : drawFonts) {
         if (f)
             TTF_CloseFont(f);
@@ -77,6 +79,8 @@ void Ui::shutdown() {
     for (auto &[k, c] : cache)
         SDL_DestroyTexture(c.tex);
     cache.clear();
+    widths.clear();
+    fits.clear();
     for (auto &f : fonts)
         if (f)
             TTF_CloseFont(f);
@@ -126,9 +130,10 @@ void Ui::vgradient(int x, int y, int w, int h, SDL_Color top, SDL_Color bottom) 
 }
 
 void Ui::disc(float cx, float cy, float r, SDL_Color c) {
-    const int n = 20;
-    SDL_Vertex v[n + 1];
-    int idx[n * 3];
+    const int max = 20;
+    int n = r < 5 ? 8 : r < 9 ? 12 : max;  // small dots don't need a smooth edge
+    SDL_Vertex v[max + 1];
+    int idx[max * 3];
     v[0] = {{cx, cy}, c, {0, 0}};
     for (int i = 0; i < n; i++) {
         float a = float(i) * 2.f * float(M_PI) / n;
@@ -175,6 +180,22 @@ int Ui::hint(int x, int y, const std::string &name, const std::string &label) {
 
 void Ui::clip(const SDL_Rect *r) {
     SDL_RenderSetClipRect(renderer, r);
+}
+
+SDL_Texture *Ui::texture(SDL_Surface *surf) {
+    SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
+    if (tex) {
+        SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(tex, SDL_ScaleModeLinear);
+    }
+    return tex;
+}
+
+Uint32 Ui::textureFormat() const {
+    SDL_RendererInfo info;
+    if (renderer && SDL_GetRendererInfo(renderer, &info) == 0 && info.num_texture_formats > 0)
+        return info.texture_formats[0];
+    return SDL_PIXELFORMAT_ARGB8888;
 }
 
 SDL_Texture *Ui::loadImage(const std::string &path, int *w, int *h) {
@@ -268,10 +289,18 @@ Ui::Cached *Ui::get(const std::string &s, FontSize fs, SDL_Color c) {
 }
 
 int Ui::measure(const std::string &s, FontSize fs) {
-    int w = 0, h = 0;
     if (s.empty())
         return 0;
+    // Text shaping is slow on the Switch and the same strings are measured every frame.
+    std::string key = char('0' + fs) + s;
+    auto it = widths.find(key);
+    if (it != widths.end())
+        return it->second;
+    int w = 0, h = 0;
     TTF_SizeUTF8(fonts[fs], s.c_str(), &w, &h);
+    if (widths.size() > 8000)
+        widths.clear();
+    widths.emplace(std::move(key), w);
     return w;
 }
 
@@ -308,6 +337,18 @@ std::vector<std::string> Ui::wrap(const std::string &s, FontSize fs, int w) {
 std::string Ui::fit(const std::string &s, FontSize fs, int maxW) {
     if (maxW <= 0 || measure(s, fs) <= maxW)
         return s;
+    std::string key = std::to_string(maxW) + char('0' + fs) + s;
+    auto it = fits.find(key);
+    if (it != fits.end())
+        return it->second;
+    if (fits.size() > 4000)
+        fits.clear();
+    std::string &out = fits[key];
+    out = cutToFit(s, fs, maxW);
+    return out;
+}
+
+std::string Ui::cutToFit(const std::string &s, FontSize fs, int maxW) {
     std::string cut = s;
     while (!cut.empty()) {
         // Drop one UTF-8 code point.
