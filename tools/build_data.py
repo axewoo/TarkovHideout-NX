@@ -249,6 +249,9 @@ def build_mode(mode):
         stations.append({"id": st.get("id"), "name": st.get("name") or st.get("id"), "levels": levels})
     stations.sort(key=lambda s: s["name"])
 
+    sample = records(crafts_data)[:2]
+    print(f"  crafts endpoint type {type(crafts_data).__name__}, {len(records(crafts_data))} records, "
+          f"{len(crafts)} from hideout levels; sample: {json.dumps(sample)[:900]}")
     for c in records(crafts_data):
         if not c.get("id"):
             continue
