@@ -3698,7 +3698,7 @@ void App::drawQuestDetail(const Quest &q, int x, int y, int w, int h) {
 
     bool cut = false;
     auto head = [&](const std::string &s) {
-        if (cut || cy > bottom - 60) {
+        if (cut || cy > bottom - 84) {
             cut = true;
             return;
         }
@@ -3708,7 +3708,8 @@ void App::drawQuestDetail(const Quest &q, int x, int y, int w, int h) {
     };
     auto line = [&](const std::string &s, SDL_Color c) {
         for (const auto &l : ui.wrap(s, FS_SMALL, w - 56)) {
-            if (cut || cy > bottom - 26) {
+            // Room is kept below for the "more on the quest page" note.
+            if (cut || cy > bottom - 52) {
                 cut = true;
                 return;
             }
