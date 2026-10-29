@@ -75,6 +75,12 @@ static bool fileExists(const std::string &path) {
     return stat(path.c_str(), &sb) == 0;
 }
 
+// stat rather than dirent's d_type, which Windows does not have.
+static bool isDir(const std::string &path) {
+    struct stat sb;
+    return stat(path.c_str(), &sb) == 0 && S_ISDIR(sb.st_mode);
+}
+
 // Creates every missing folder above a file path.
 static void makeParents(const std::string &path) {
     for (size_t i = path.find('/', 1); i != std::string::npos; i = path.find('/', i + 1))
@@ -618,7 +624,7 @@ bool App::downloadData(bool quiet) {
     std::vector<std::string> dirs = {"/maps/", "/maps/floors/", "/maps/thumbs/"};
     if (DIR *dir = opendir(APP_DIR "/maps/")) {
         while (struct dirent *e = readdir(dir))
-            if (e->d_name[0] != '.' && e->d_type == DT_DIR)
+            if (e->d_name[0] != '.' && isDir(std::string(APP_DIR "/maps/") + e->d_name))
                 dirs.push_back(std::string("/maps/") + e->d_name + "/");
         closedir(dir);
     }
@@ -626,7 +632,7 @@ bool App::downloadData(bool quiet) {
         std::string d = std::string(APP_DIR) + sub;
         if (DIR *dir = opendir(d.c_str())) {
             while (struct dirent *e = readdir(dir))
-                if (e->d_name[0] != '.' && e->d_type != DT_DIR)
+                if (e->d_name[0] != '.' && !isDir(d + e->d_name))
                     remove((d + e->d_name).c_str());
             closedir(dir);
         }
