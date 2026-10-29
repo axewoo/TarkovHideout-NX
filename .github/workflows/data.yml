@@ -34,6 +34,19 @@ jobs:
         continue-on-error: true
         run: python tools/probe.py
 
+      - name: Reuse the previous map renders and wiki pictures
+        # Daily runs keep the map pieces and pictures already published (the build skips files that exist),
+        # so they finish quickly and push identical files. Changes to the tools rebuild everything.
+        if: github.event_name != 'push'
+        continue-on-error: true
+        run: |
+          git clone -q --depth 1 -b data "https://github.com/${{ github.repository }}" prev
+          mkdir -p out/maps
+          for d in prev/maps/*/; do [ -f "$d/meta.json" ] && cp -r "$d" out/maps/; done
+          [ -d prev/wiki ] && cp -r prev/wiki out/
+          rm -rf prev
+          du -sh out
+
       - name: Build compact data from tarkov.dev
         run: python tools/build_data.py out --assets
 
@@ -48,4 +61,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add *.json icons-*.jpg maps $(ls -d wiki 2>/dev/null)
           git commit -qm "Hideout data $(date -u +%F)"
+          du -sh maps wiki 2>/dev/null; git count-objects -vH
           git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" data

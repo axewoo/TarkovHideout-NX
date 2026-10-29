@@ -8,3 +8,4 @@ __pycache__/
 romfs/maps/
 romfs/icons-*.jpg
 romfs/wiki.json
+romfs/wiki/

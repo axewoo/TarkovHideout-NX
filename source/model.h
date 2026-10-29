@@ -181,11 +181,21 @@ struct MapMarker {
     float u, v;  // 0..1 across the map image
 };
 
+// One sharper copy of a map image, cut in kMapChunk squares stored next to the image:
+// "maps/x/render.jpg" has its level 2 piece (3, 1) at "maps/x/render/2/3_1.jpg".
+struct MapLevel {
+    int w = 0, h = 0;          // full-map size at this level
+    std::vector<bool> have;    // cy * cols + cx; missing pieces are plain background
+};
+
+static const int kMapChunk = 1024;
+
 // One floor of a map. The image is the dimmed base with the floor drawn on top, covering r (0..1 of the map).
 struct MapFloor {
     std::string name;
     std::string image, alt;  // per style, like MapInfo::image / alt; empty for the base level
     float r[4] = {0, 0, 1, 1}, ar[4] = {0, 0, 1, 1};
+    std::vector<MapLevel> levels, altLevels;  // pieces only where the floor is
 };
 
 struct MapInfo {
@@ -194,6 +204,7 @@ struct MapInfo {
     std::string image;  // path relative to the data root, e.g. maps/customs.jpg
     std::string alt;    // optional second style (vector plan), same framing as image
     std::string thumb;  // small preview for the map picker
+    std::vector<MapLevel> levels, altLevels;  // coarsest first; empty for data without them
     std::vector<MapFloor> floors;  // bottom to top; empty when the map has a single level
     int baseFloor = 0;             // index of the ground level in floors
     int w = 0, h = 0;

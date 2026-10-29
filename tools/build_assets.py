@@ -5,7 +5,7 @@ Icons: every item the hideout data references is packed into one PNG atlas of
 
 Maps: tarkov.dev's interactive map metadata (the-hideout/tarkov-dev maps.json)
 says how game coordinates project onto each map image. Each map is rendered
-once to a JPEG of at most MAP_PX on its long side, and extracts, transits and
+once as an overview plus chunked detail levels (see MAP_FORMAT), and extracts, transits and
 boss spawns from json.tarkov.dev are converted to 0..1 image coordinates so
 the app never needs to know about projections.
 """
@@ -28,7 +28,15 @@ ICON_PX = 64
 ATLAS_COLS = 32
 PAGE_ICONS = ATLAS_COLS * ATLAS_COLS
 CELL_RGB = (36, 37, 32)  # col::cell in the app
-MAP_PX = 4096
+# Maps are published as a small overview image plus levels of CHUNK-sized JPEG pieces, so the
+# app can show source detail when zoomed in without holding a whole huge image in memory.
+MAP_FORMAT = 2
+CHUNK = 1024
+OVERVIEW_PX = 2048
+HI_MAX_PX = 11000        # long side of the sharpest level for full maps
+SPARSE_MAPS = {"icebreaker"}  # mostly sea: the full source resolution costs little
+SVG_HI_PX = 8192
+BG_RGB = (27, 28, 24)
 MAPS_META = "https://raw.githubusercontent.com/the-hideout/tarkov-dev/main/src/data/maps.json"
 
 # Game map ids that reuse another map's image.
@@ -127,8 +135,8 @@ class Projection:
 _svg_cache = {}
 
 
-def render_svg(meta, keep=None):
-    """Renders the base plan, plus the floor group `keep` when given."""
+def render_svg(meta, keep=None, px=SVG_HI_PX):
+    """Renders the base plan (long side px), plus the floor group `keep` when given."""
     import cairosvg
 
     url = meta["svgPath"]
@@ -141,8 +149,8 @@ def render_svg(meta, keep=None):
         if gid and gid != keep:
             svg = remove_group(svg, gid)
     m = re.search(r'viewBox="([\d.\s,-]+)"', svg)
-    vw, vh = (float(v) for v in re.split(r"[\s,]+", m.group(1).strip())[2:4]) if m else (MAP_PX, MAP_PX)
-    scale = MAP_PX / max(vw, vh)
+    vw, vh = (float(v) for v in re.split(r"[\s,]+", m.group(1).strip())[2:4]) if m else (px, px)
+    scale = px / max(vw, vh)
     png = cairosvg.svg2png(bytestring=svg.encode("utf-8"), output_width=round(vw * scale),
                            output_height=round(vh * scale), background_color="#1b1c18")
     return Image.open(io.BytesIO(png)).convert("RGB")
@@ -163,18 +171,22 @@ def remove_group(svg, gid):
     return svg[:start.start()] + svg[pos:]
 
 
-def render_tiles(meta, proj, rect, tile_path=None):
-    """Stitches a tile layer over rect; with tile_path (a floor) the result keeps its transparency."""
+def render_tiles(meta, rect, zoom, tile_path=None, box=None):
+    """Stitches a tile layer over rect at zoom (rect units * 2**zoom pixels).
+
+    box (pixels of that full image) limits the result to a sub-rectangle.
+    With tile_path (a floor) the result keeps its transparency.
+    """
     tile = meta.get("tileSize") or 256
-    x0, y0, x1, y1 = rect
-    # Pick the zoom that makes the long side closest to MAP_PX without going over maxZoom.
-    zoom = max(0, min(meta.get("maxZoom") or 6, round(math.log2(MAP_PX / max(x1 - x0, y1 - y0)))))
     s = 2 ** zoom
-    px0, py0, px1, py1 = x0 * s, y0 * s, x1 * s, y1 * s
+    fx0, fy0 = rect[0] * s, rect[1] * s
+    full = (round((rect[2] - rect[0]) * s), round((rect[3] - rect[1]) * s))
+    bx0, by0, bx1, by1 = box or (0, 0, full[0], full[1])
+    px0, py0, px1, py1 = fx0 + bx0, fy0 + by0, fx0 + bx1, fy0 + by1
     tx0, ty0 = math.floor(px0 / tile), math.floor(py0 / tile)
-    tx1, ty1 = math.floor(px1 / tile), math.floor(py1 / tile)
+    tx1, ty1 = math.floor((px1 - 1) / tile), math.floor((py1 - 1) / tile)
     canvas_size = ((tx1 - tx0 + 1) * tile, (ty1 - ty0 + 1) * tile)
-    canvas = Image.new("RGBA", canvas_size, (0, 0, 0, 0)) if tile_path else Image.new("RGB", canvas_size, (27, 28, 24))
+    canvas = Image.new("RGBA", canvas_size, (0, 0, 0, 0)) if tile_path else Image.new("RGB", canvas_size, BG_RGB)
 
     def fetch_tile(t):
         url = (tile_path or meta["tilePath"]).replace("{z}", str(zoom)).replace("{x}", str(t[0])).replace("{y}", str(t[1]))
@@ -196,10 +208,10 @@ def render_tiles(meta, proj, rect, tile_path=None):
             else:
                 canvas.paste(img, ((tx - tx0) * tile, (ty - ty0) * tile), img)
             got += 1
-    if not got:
+    if not got and not tile_path:
         raise RuntimeError("no tiles")
     ox, oy = tx0 * tile, ty0 * tile
-    return canvas.crop((round(px0 - ox), round(py0 - oy), round(px1 - ox), round(py1 - oy)))
+    return canvas.crop((round(px0 - ox), round(py0 - oy), round(px0 - ox) + (bx1 - bx0), round(py0 - oy) + (by1 - by0)))
 
 
 def interactive_maps():
@@ -236,9 +248,19 @@ def markers(gm, proj, rect, mobs):
             return round(min(max(u, 0), 1), 4), round(min(max(v, 0), 1), 4)
         return None
 
+    def zone(e):
+        # The extract zone is where you stand; position can be elsewhere (Icebreaker's helicopter).
+        pts = [q for q in e.get("outline") or [] if isinstance(q, dict) and "x" in q and "z" in q]
+        if pts:
+            return {"x": sum(q["x"] for q in pts) / len(pts), "z": sum(q["z"] for q in pts) / len(pts)}
+        return e.get("position")
+
     out = []
     for e in gm.get("extracts") or []:
-        p = uv(e.get("position"))
+        p = uv(zone(e))
+        if gm.get("normalizedName") == "icebreaker":
+            print(f"    icebreaker extract {e.get('name')}: position {e.get('position')} "
+                  f"outline {len(e.get('outline') or [])} pts -> {p}")
         if p:
             out.append({"t": {"pmc": "pmc", "scav": "scav"}.get(e.get("faction"), "shared"),
                         "n": e.get("name") or "Extract", "u": p[0], "v": p[1]})
@@ -303,7 +325,7 @@ def load_maps(mode):
 FLOOR_DIM = 0.45  # base brightness under a floor; the app dims with black at alpha 255 * (1 - FLOOR_DIM)
 BELOW_GROUND = ("underground", "tunnel", "bunker", "garage", "basement", "technical")
 THUMB_SIZE = (296, 112)
-_floor_cache = {}
+_map_cache = {}
 
 
 def _height(layer):
@@ -315,74 +337,215 @@ def _height(layer):
     return (ext[0].get("height") or [0])[0]
 
 
-def svg_overlay(meta, gid, size):
-    """The pixels a floor group adds to the plan, as RGBA."""
-    # Compare against a fresh base render: the saved JPEG's artifacts would differ everywhere.
-    key = (meta["svgPath"], size)
-    if key not in _svg_cache:
-        _svg_cache[key] = render_svg(meta).resize(size, Image.LANCZOS)
-    with_layer = render_svg(meta, keep=gid).resize(size, Image.LANCZOS)
-    diff = ImageChops.difference(with_layer, _svg_cache[key]).convert("L")
-    mask = diff.point(lambda v: 255 if v > 12 else 0).filter(ImageFilter.MaxFilter(5))
-    with_layer.putalpha(mask)
-    return with_layer
+def fit_size(rect, long_side):
+    """Pixel size with the rect's aspect (Leaflet stretches images over the bounds)."""
+    aspect = (rect[2] - rect[0]) / (rect[3] - rect[1])
+    return (long_side, round(long_side / aspect)) if aspect >= 1 else (round(long_side * aspect), long_side)
 
 
-def floor_image(base, overlay, path):
-    """Saves the dimmed base with the floor on top, cropped to the floor; returns the 0..1 rect."""
-    alpha = overlay.getchannel("A")
-    box = alpha.getbbox()
+def level_sizes(size):
+    """Chunked level sizes, coarsest first, halving from the sharpest down to about 4k."""
+    sizes = [size]
+    while max(sizes[-1]) > 4500:
+        sizes.append((round(sizes[-1][0] / 2), round(sizes[-1][1] / 2)))
+    return sizes[::-1]
+
+
+def write_chunks(img, folder, level_size, origin=(0, 0), skip_empty=True):
+    """Saves the CHUNK cells img covers; img's top-left sits at origin (a chunk corner) in level pixels.
+
+    Returns the set of written cell indices (cy * cols + cx).
+    """
+    cols = math.ceil(level_size[0] / CHUNK)
+    ox, oy = origin
+    have = set()
+    for y in range(0, img.height, CHUNK):
+        for x in range(0, img.width, CHUNK):
+            piece = img.crop((x, y, min(img.width, x + CHUNK), min(img.height, y + CHUNK)))
+            if skip_empty:
+                diff = ImageChops.difference(piece, Image.new("RGB", piece.size, BG_RGB)).convert("L")
+                if diff.getextrema()[1] <= 6:
+                    continue
+            cx, cy = (ox + x) // CHUNK, (oy + y) // CHUNK
+            os.makedirs(folder, exist_ok=True)
+            piece.save(os.path.join(folder, f"{cx}_{cy}.jpg"), quality=82)
+            have.add(cy * cols + cx)
+    return have
+
+
+def have_hex(have):
+    return format(sum(1 << i for i in have), "x") if have else "0"
+
+
+def publish_levels(hi, folder, out, overview_path):
+    """Writes the overview and chunk levels of a full-frame image; returns (overview size, levels)."""
+    levels = []
+    for i, size in enumerate(level_sizes(hi.size)):
+        img = hi if size == hi.size else hi.resize(size, Image.LANCZOS)
+        have = write_chunks(img, os.path.join(out, folder, str(i)), size)
+        levels.append([size[0], size[1], have_hex(have)])
+    ov = hi.resize(fit_size((0, 0, hi.width, hi.height), OVERVIEW_PX), Image.LANCZOS)
+    ov.save(os.path.join(out, overview_path), quality=85, optimize=True)
+    return ov.size, levels
+
+
+_base_svg = {}
+
+
+def base_svg(meta, px, size):
+    """The plan without floors, cached per map while its floors are built."""
+    key = (meta["svgPath"], px, size)
+    if key not in _base_svg:
+        _base_svg[key] = render_svg(meta, px=px).resize(size, Image.LANCZOS)
+    return _base_svg[key]
+
+
+def svg_mask(with_layer, base):
+    diff = ImageChops.difference(with_layer, base).convert("L")
+    return diff.point(lambda v: 255 if v > 12 else 0).filter(ImageFilter.MaxFilter(5))
+
+
+def floor_overlay_box(meta, rect, layer, style, z_hi, hi_size):
+    """Where a floor has content, as a 0..1 box, found on a cheap low-resolution render."""
+    if layer.get("tilePath") and (style == "render" or not layer.get("svgLayer")):
+        z = max(0, z_hi - 3)
+        low = render_tiles(meta, rect, z, layer["tilePath"])
+        box = low.getchannel("A").getbbox()
+        size = low.size
+    elif layer.get("svgLayer"):
+        size = fit_size(rect, OVERVIEW_PX)
+        base = base_svg(meta, OVERVIEW_PX, size)
+        box = svg_mask(render_svg(meta, keep=layer["svgLayer"], px=OVERVIEW_PX).resize(size, Image.LANCZOS),
+                       base).getbbox()
+    else:
+        return None
     if not box:
         return None
-    comp = Image.eval(base.crop(box), lambda v: int(v * FLOOR_DIM))
-    comp.paste(overlay.crop(box).convert("RGB"), (0, 0), alpha.crop(box))
-    comp.save(path, quality=80, optimize=True)
-    w, h = base.size
-    return [round(box[0] / w, 5), round(box[1] / h, 5), round(box[2] / w, 5), round(box[3] / h, 5)]
+    pad = 2
+    return (max(0, (box[0] - pad) / size[0]), max(0, (box[1] - pad) / size[1]),
+            min(1, (box[2] + pad) / size[0]), min(1, (box[3] + pad) / size[1]))
 
 
-def build_floors(meta, proj, rect, img_key, out, files):
-    """Floor list bottom to top, with one entry (no image) for the base map.
+def floor_overlay(meta, rect, layer, style, z_hi, hi, box_px):
+    """The floor's own pixels inside box_px (hi-level pixels), as RGBA."""
+    if style == "render" and layer.get("tilePath"):
+        return render_tiles(meta, rect, z_hi, layer["tilePath"], box_px)
+    if style == "render" and layer.get("svgLayer") and meta.get("svgPath"):
+        # A floor only drawn as a plan, shown over the render.
+        style = "plan"
+    if layer.get("svgLayer") and meta.get("svgPath"):
+        size = fit_size(rect, SVG_HI_PX)
+        base = base_svg(meta, SVG_HI_PX, size)
+        with_layer = render_svg(meta, keep=layer["svgLayer"]).resize(size, Image.LANCZOS)
+        if size != hi.size:
+            base, with_layer = base.resize(hi.size, Image.LANCZOS), with_layer.resize(hi.size, Image.LANCZOS)
+        base, with_layer = base.crop(box_px), with_layer.crop(box_px)
+        with_layer.putalpha(svg_mask(with_layer, base))
+        return with_layer
+    if layer.get("tilePath") and meta.get("tilePath"):
+        # A floor only drawn as a render, shown over the plan: render at the plan's scale.
+        z = round(math.log2(hi.width / (rect[2] - rect[0])))
+        scale = (2 ** z) * (rect[2] - rect[0]) / hi.width
+        b = tuple(round(v * scale) for v in box_px)
+        return render_tiles(meta, rect, z, layer["tilePath"], b).resize(
+            (box_px[2] - box_px[0], box_px[3] - box_px[1]), Image.LANCZOS)
+    return None
 
-    Each floor has an image per style (game render and plan): the base dimmed
-    with that floor drawn on top, cropped to where the floor has content.
-    Floors only drawn in one style borrow that overlay for the other.
+
+def publish_floor(hi, overlay, box_px, folder, out, overview_path):
+    """Writes a floor: the dimmed base with the floor on top, as an overview crop plus chunk levels
+    covering only the floor. Returns (r, levels) or None when the floor is empty."""
+    alpha = overlay.getchannel("A")
+    inner = alpha.getbbox()
+    if not inner:
+        return None
+    box_px = (box_px[0] + inner[0], box_px[1] + inner[1], box_px[0] + inner[2], box_px[1] + inner[3])
+    overlay = overlay.crop(inner)
+    W, H = hi.size
+    r = [round(box_px[0] / W, 5), round(box_px[1] / H, 5), round(box_px[2] / W, 5), round(box_px[3] / H, 5)]
+    levels = []
+    for i, size in enumerate(level_sizes(hi.size) + [fit_size((0, 0, W, H), OVERVIEW_PX)]):
+        sx, sy = size[0] / W, size[1] / H
+        b = (math.floor(box_px[0] * sx), math.floor(box_px[1] * sy), math.ceil(box_px[2] * sx), math.ceil(box_px[3] * sy))
+        is_overview = i == len(level_sizes(hi.size))
+        # Chunk levels start on a cell corner so the pieces line up with the base map's.
+        region = b if is_overview else ((b[0] // CHUNK) * CHUNK, (b[1] // CHUNK) * CHUNK,
+                                        min(size[0], -(-b[2] // CHUNK) * CHUNK), min(size[1], -(-b[3] // CHUNK) * CHUNK))
+        src = (region[0] / sx, region[1] / sy, region[2] / sx, region[3] / sy)
+        base = hi.crop(tuple(round(v) for v in src)).resize((region[2] - region[0], region[3] - region[1]), Image.LANCZOS)
+        comp = Image.eval(base, lambda v: int(v * FLOOR_DIM))
+        ov = overlay.resize((max(1, b[2] - b[0]), max(1, b[3] - b[1])), Image.LANCZOS)
+        comp.paste(ov.convert("RGB"), (b[0] - region[0], b[1] - region[1]), ov.getchannel("A"))
+        if is_overview:
+            comp.save(os.path.join(out, overview_path), quality=82, optimize=True)
+        else:
+            have = write_chunks(comp, os.path.join(out, folder, str(i)), size, region[:2], skip_empty=False)
+            levels.append([size[0], size[1], have_hex(have)])
+    return r, levels
+
+
+def build_map_images(meta, proj, rect, img_key, out):
+    """Renders a map's styles and floors (cached per image key, and on disk across runs).
+
+    Returns {"styles": [{"name", "img", "w", "h", "lv"}], "floors": [{"n", "s": [{"img", "r", "lv"} | None]}]},
+    floors bottom to top with an entry (no "s") for the base level.
     """
-    if img_key in _floor_cache:
-        return _floor_cache[img_key]
+    if img_key in _map_cache:
+        return _map_cache[img_key]
+    meta_path = os.path.join(out, "maps", img_key, "meta.json")
+    if os.path.exists(meta_path):
+        with open(meta_path, encoding="utf-8") as f:
+            cached = json.load(f)
+        if cached.get("format") == MAP_FORMAT and cached.get("source") == meta.get("tilePath", "") + meta.get("svgPath", ""):
+            _map_cache[img_key] = cached
+            return cached
+    os.makedirs(os.path.join(out, "maps", img_key), exist_ok=True)
+    sparse = img_key in SPARSE_MAPS
+    ext = max(rect[2] - rect[0], rect[3] - rect[1])
+    z_hi = meta.get("maxZoom") or 6
+    while not sparse and z_hi > 0 and ext * 2 ** z_hi > HI_MAX_PX:
+        z_hi -= 1
+
     layers = [l for l in meta.get("layers") or [] if l.get("tilePath") or l.get("svgLayer")]
     base_layer = next((l for l in layers if l.get("tilePath") and l["tilePath"] == meta.get("tilePath")), None)
     layers = [l for l in layers if l is not base_layer]
-    floors = []
-    if layers:
-        bases = [Image.open(os.path.join(out, f)).convert("RGB") for f in files]
-        size = bases[0].size
-        plan_idx = 1 if meta.get("tilePath") and meta.get("svgPath") else (0 if meta.get("svgPath") else None)
-        render_idx = 0 if meta.get("tilePath") else None
-        fdir = os.path.join(out, "maps", "floors")
-        os.makedirs(fdir, exist_ok=True)
+
+    styles, floor_sets = [], {id(l): [] for l in layers}
+    # The game render (tiles) is the main style where it exists; the vector plan is the alternative.
+    for style in [n for n, k in (("render", "tilePath"), ("plan", "svgPath")) if meta.get(k)]:
+        try:
+            hi = render_tiles(meta, rect, z_hi) if style == "render" else \
+                base_svg(meta, SVG_HI_PX, fit_size(rect, SVG_HI_PX))
+        except Exception as e:  # noqa: BLE001
+            print(f"  {img_key} {style} render failed: {e}", file=sys.stderr)
+            continue
+        folder = f"maps/{img_key}/{style}"
+        (w, h), levels = publish_levels(hi, folder, out, folder + ".jpg")
+        styles.append({"name": style, "img": folder + ".jpg", "w": w, "h": h, "lv": levels})
         for layer in layers:
             slug = re.sub(r"[^a-z0-9]+", "-", layer["name"].lower()).strip("-")
-            tiles = svg = None
+            entry = None
             try:
-                if layer.get("tilePath") and render_idx is not None:
-                    tiles = render_tiles(meta, proj, rect, layer["tilePath"]).resize(size, Image.LANCZOS)
-                if layer.get("svgLayer") and plan_idx is not None:
-                    svg = svg_overlay(meta, layer["svgLayer"], size)
+                box = floor_overlay_box(meta, rect, layer, style, z_hi, hi.size)
+                if not box and style == "render":
+                    box = floor_overlay_box(meta, rect, layer, "plan", z_hi, hi.size)
+                if box:
+                    box_px = (math.floor(box[0] * hi.width), math.floor(box[1] * hi.height),
+                              math.ceil(box[2] * hi.width), math.ceil(box[3] * hi.height))
+                    overlay = floor_overlay(meta, rect, layer, style, z_hi, hi, box_px)
+                    if overlay is not None:
+                        ffolder = f"{folder}-f-{slug}"
+                        res = publish_floor(hi, overlay, box_px, ffolder, out, ffolder + ".jpg")
+                        if res:
+                            entry = {"img": ffolder + ".jpg", "r": res[0], "lv": res[1]}
             except Exception as e:  # noqa: BLE001
-                print(f"  {img_key} floor {layer['name']} failed: {e}", file=sys.stderr)
-            entry = {"n": layer["name"], "h": _height(layer)}
-            for i, f in enumerate(files):
-                over = (tiles or svg) if i == render_idx else (svg or tiles)
-                if over is None:
-                    continue
-                rel = f"maps/floors/{img_key}-{slug}{'-plan' if i else ''}.jpg"
-                r = floor_image(bases[i], over, os.path.join(out, rel))
-                if r:
-                    entry["alt" if i else "img"] = rel
-                    entry["ar" if i else "r"] = r
-            if "img" in entry:
-                floors.append(entry)
+                print(f"  {img_key} floor {layer['name']} ({style}) failed: {e}", file=sys.stderr)
+            floor_sets[id(layer)].append(entry)
+        del hi
+    _base_svg.clear()
+
+    floors = [{"n": l["name"], "h": _height(l), "s": floor_sets[id(l)]}
+              for l in layers if any(floor_sets[id(l)])]
     if floors:
         if base_layer:
             base_h = _height(base_layer)
@@ -396,8 +559,16 @@ def build_floors(meta, proj, rect, img_key, out, files):
         floors = below + [{"n": base_layer["name"] if base_layer else "Ground level"}] + above
         for f in floors:
             f.pop("h", None)
-    _floor_cache[img_key] = floors
-    return floors
+    result = {"format": MAP_FORMAT, "source": meta.get("tilePath", "") + meta.get("svgPath", ""),
+              "styles": styles, "floors": floors}
+    if styles:
+        with Image.open(os.path.join(out, styles[0]["img"])) as im:
+            ImageOps.fit(im.convert("RGB"), THUMB_SIZE, Image.LANCZOS).save(
+                os.path.join(out, "maps", img_key, "thumb.jpg"), quality=85)
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, separators=(",", ":"))
+    _map_cache[img_key] = result
+    return result
 
 
 def build_maps(mode, out, loaded=None):
@@ -419,43 +590,33 @@ def build_maps(mode, out, loaded=None):
             continue
         proj = Projection(meta)
         rect = proj.rect(meta.get("svgBounds") or meta["bounds"])
-        # The game render (tiles) is the main image where it exists; the vector plan is the
-        # alternative. Both cover the same rect, so markers line up on either.
-        styles = []
-        if meta.get("tilePath"):
-            styles.append(("render", f"maps/{img_key}.jpg", lambda: render_tiles(meta, proj, rect)))
-        if meta.get("svgPath"):
-            styles.append(("plan", f"maps/{img_key}{'-plan' if styles else ''}.jpg", lambda: render_svg(meta)))
-        files = []
-        for style, img_file, render in styles:
-            path = os.path.join(out, img_file)
-            if not os.path.exists(path):
-                try:
-                    img = render()
-                except Exception as e:  # noqa: BLE001
-                    print(f"  [{name}] {img_key} {style} render failed: {e}", file=sys.stderr)
-                    continue
-                # Leaflet stretches the image over the bounds, so match their aspect ratio.
-                aspect = (rect[2] - rect[0]) / (rect[3] - rect[1])
-                size = (MAP_PX, round(MAP_PX / aspect)) if aspect >= 1 else (round(MAP_PX * aspect), MAP_PX)
-                img = img.resize(size, Image.LANCZOS)
-                img.save(path, quality=85, optimize=True)
-            files.append(img_file)
-        if not files:
+        imgs = build_map_images(meta, proj, rect, img_key, out)
+        styles = imgs["styles"]
+        if not styles:
             continue
-        img_file = files[0]
-        with Image.open(os.path.join(out, img_file)) as im:
-            w, h = im.size
-            thumb = f"maps/thumbs/{img_key}.jpg"
-            os.makedirs(os.path.join(out, "maps", "thumbs"), exist_ok=True)
-            ImageOps.fit(im.convert("RGB"), THUMB_SIZE, Image.LANCZOS).save(os.path.join(out, thumb), quality=85)
-        floors = build_floors(meta, proj, rect, img_key, out, files)
+        # img/alt/w/h and floors' img/r/alt/ar are what app versions before tiled levels read.
+        floors = []
+        for fl in imgs["floors"]:
+            f = {"n": fl["n"]}
+            for i, sv in enumerate(fl.get("s") or []):
+                if sv:
+                    pre = "a" if i else ""
+                    f["alt" if i else "img"] = sv["img"]
+                    f[pre + "r"] = sv["r"]
+                    f[pre + "lv"] = sv["lv"]
+            if "s" not in fl or "img" in f or "alt" in f:
+                if "s" in fl and "img" not in f:  # only drawn in the second style
+                    f["img"], f["r"], f["lv"] = f.pop("alt"), f.pop("ar"), f.pop("alv")
+                floors.append(f)
         mk = markers(gm, proj, rect, mobs)
-        entries.append({"id": key, "name": gm.get("name") or key, "img": img_file,
-                        "alt": files[1] if len(files) > 1 else "", "thumb": thumb, "floors": floors, "w": w, "h": h,
+        entries.append({"id": key, "name": gm.get("name") or key, "img": styles[0]["img"], "lv": styles[0]["lv"],
+                        "alt": styles[1]["img"] if len(styles) > 1 else "",
+                        "alv": styles[1]["lv"] if len(styles) > 1 else [],
+                        "thumb": f"maps/{img_key}/thumb.jpg", "floors": floors,
+                        "w": styles[0]["w"], "h": styles[0]["h"],
                         "dur": gm.get("raidDuration") or 0, "players": gm.get("players") or "",
                         "markers": mk})
-        print(f"  [{name}] {key}: {', '.join(files)} {w}x{h}, {len(mk)} markers, "
+        print(f"  [{name}] {key}: {[(st['name'], st['lv'][-1][:2]) for st in styles]}, {len(mk)} markers, "
               f"floors {[f['n'] for f in floors]}")
     order = ["ground-zero", "ground-zero-21", "factory", "night-factory", "customs", "woods", "shoreline",
              "interchange", "reserve", "lighthouse", "streets-of-tarkov", "the-lab", "the-lab-dark",
@@ -463,5 +624,5 @@ def build_maps(mode, out, loaded=None):
     entries.sort(key=lambda e: (order.index(e["id"]) if e["id"] in order else 99, e["name"]))
     path = os.path.join(out, f"maps-{name}.json")
     with open(path, "w", encoding="utf-8") as f:
-        json.dump({"version": 1, "maps": entries}, f, ensure_ascii=False, separators=(",", ":"))
+        json.dump({"version": 2, "maps": entries}, f, ensure_ascii=False, separators=(",", ":"))
     print(f"wrote {path}: {len(entries)} maps")

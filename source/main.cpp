@@ -9,6 +9,7 @@
 #include <ctime>
 #include <fstream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -67,6 +68,12 @@ static bool writeFile(const std::string &path, const std::string &data) {
 static bool fileExists(const std::string &path) {
     struct stat sb;
     return stat(path.c_str(), &sb) == 0;
+}
+
+// Creates every missing folder above a file path.
+static void makeParents(const std::string &path) {
+    for (size_t i = path.find('/', 1); i != std::string::npos; i = path.find('/', i + 1))
+        mkdir(path.substr(0, i).c_str(), 0777);
 }
 
 static std::string groupDigits(int64_t n) {
@@ -290,6 +297,10 @@ private:
     void drawMapPicker();
     void drawTiles(const std::vector<SDL_Texture *> &tiles, int imgW, int imgH, float x, float y, float w, float h,
                    int top, int bottom);
+    void drawLevels(const std::string &image, const std::vector<MapLevel> &levels, int overviewW, float x, float y,
+                    float w, float h, int top, int bottom);
+    SDL_Texture *mapChunk(const std::string &path);
+    void freeChunks();
     std::vector<int> visibleMarkers() const;
     void centerOnMarker();
 
@@ -332,6 +343,15 @@ private:
     int floorImgW = 0, floorImgH = 0;
     std::string floorTexId;
     std::map<std::string, SDL_Texture *> mapThumbs;
+    // Sharp map pieces, kept while recently drawn; a few load per frame so panning stays smooth.
+    struct Chunk {
+        SDL_Texture *tex;
+        int used;
+    };
+    std::map<std::string, Chunk> mapChunks;
+    std::set<std::string> chunkMissing;
+    int mapFrame = 0, chunkLoads = 0, chunkNetFails = 0;
+    uint32_t mapFrameStart = 0;
     bool mapFailed = false;
     float mapZoom = 1, mapU = 0.5f, mapV = 0.5f;
     int markerFilter = -1;  // -1 = all, else MarkerType
@@ -534,12 +554,20 @@ bool App::downloadData(bool quiet) {
             writeFile(std::string(APP_DIR "/") + file, f.body);
     }
     writeFile(std::string(APP_DIR "/") + name, r.body);
-    // Map images can change with the data; drop downloaded copies so they refetch on view.
-    for (const char *sub : {"/maps/", "/maps/floors/", "/maps/thumbs/"}) {
+    // Map images can change with the data; drop downloaded overviews so they refetch on view.
+    // Sharp pieces stay: they only change when the source renders do.
+    std::vector<std::string> dirs = {"/maps/", "/maps/floors/", "/maps/thumbs/"};
+    if (DIR *dir = opendir(APP_DIR "/maps/")) {
+        while (struct dirent *e = readdir(dir))
+            if (e->d_name[0] != '.' && e->d_type == DT_DIR)
+                dirs.push_back(std::string("/maps/") + e->d_name + "/");
+        closedir(dir);
+    }
+    for (const std::string &sub : dirs) {
         std::string d = std::string(APP_DIR) + sub;
         if (DIR *dir = opendir(d.c_str())) {
             while (struct dirent *e = readdir(dir))
-                if (e->d_name[0] != '.')
+                if (e->d_name[0] != '.' && e->d_type != DT_DIR)
                     remove((d + e->d_name).c_str());
             closedir(dir);
         }
@@ -1043,9 +1071,7 @@ std::string App::mapFile(const MapInfo &m, const std::string &image, bool quiet)
         return "";
     busy("Downloading " + m.name + " map...");
     HttpResult r = httpGet(DATA_URL + image);
-    size_t slash = image.rfind('/');
-    if (slash != std::string::npos)
-        mkdir((std::string(APP_DIR "/") + image.substr(0, slash)).c_str(), 0777);
+    makeParents(sd);
     if (r.ok && r.status == 200 && writeFile(sd, r.body)) {
         setStatus(m.name + " map saved for offline use", col::good);
         return sd;
@@ -1081,7 +1107,68 @@ void App::openMap(int idx) {
     mapFloor = maps[idx].baseFloor;
 }
 
+static const int kMaxChunks = 32;
+
+// A sharp piece from the SD card or romfs, downloaded silently when neither has it.
+// Returns nullptr when it is not ready yet (try again next frame) or does not exist.
+SDL_Texture *App::mapChunk(const std::string &path) {
+    auto it = mapChunks.find(path);
+    if (it != mapChunks.end()) {
+        it->second.used = mapFrame;
+        return it->second.tex;
+    }
+    if (chunkMissing.count(path) || (chunkLoads > 0 && SDL_GetTicks() - mapFrameStart > 12))
+        return nullptr;
+    chunkLoads++;
+    std::string file = "romfs:/" + path;
+    if (!fileExists(file)) {
+        file = std::string(APP_DIR "/") + path;
+        if (!fileExists(file)) {
+            HttpResult r;
+            if (chunkNetFails < 3)
+                r = httpGet(DATA_URL + path);
+            if (!r.ok || r.status != 200) {
+                if (!r.ok)
+                    chunkNetFails++;
+                chunkMissing.insert(path);
+                return nullptr;
+            }
+            makeParents(file);
+            if (!writeFile(file, r.body)) {
+                chunkMissing.insert(path);
+                return nullptr;
+            }
+        }
+    }
+    SDL_Texture *tex = ui.loadImage(file);
+    if (!tex) {
+        chunkMissing.insert(path);
+        return nullptr;
+    }
+    while ((int)mapChunks.size() >= kMaxChunks) {
+        auto old = mapChunks.end();
+        for (auto c = mapChunks.begin(); c != mapChunks.end(); ++c)
+            if (c->second.used < mapFrame && (old == mapChunks.end() || c->second.used < old->second.used))
+                old = c;
+        if (old == mapChunks.end())
+            break;
+        SDL_DestroyTexture(old->second.tex);
+        mapChunks.erase(old);
+    }
+    mapChunks[path] = {tex, mapFrame};
+    return tex;
+}
+
+void App::freeChunks() {
+    for (auto &kv : mapChunks)
+        SDL_DestroyTexture(kv.second.tex);
+    mapChunks.clear();
+    chunkMissing.clear();
+    chunkNetFails = 0;
+}
+
 void App::freeMapTiles() {
+    freeChunks();
     for (SDL_Texture *t : mapTiles)
         SDL_DestroyTexture(t);
     mapTiles.clear();
@@ -1165,7 +1252,7 @@ void App::inputMaps() {
         zoomStep += 0.03f;
     if (in.held & HidNpadButton_X)
         zoomStep -= 0.03f;
-    mapZoom = std::clamp(mapZoom * (1 + zoomStep), 1.f, 12.f);
+    mapZoom = std::clamp(mapZoom * (1 + zoomStep), 1.f, 16.f);
 
     const MapInfo *m = currentMap();
     int top, bottom;
@@ -1180,8 +1267,11 @@ void App::inputMaps() {
         mapU -= in.touchDX / (scale * m->w);
         mapV -= in.touchDY / (scale * m->h);
     }
-    mapU = std::clamp(mapU, 0.f, 1.f);
-    mapV = std::clamp(mapV, 0.f, 1.f);
+    // Keep the view center where the view can actually go: past the point where the map edge
+    // reaches the screen edge the drawing stops moving, and panning back felt stuck.
+    float hu = std::min(0.5f, viewW / 2 / (m->w * scale)), hv = std::min(0.5f, viewH / 2 / (m->h * scale));
+    mapU = std::clamp(mapU, hu, 1 - hu);
+    mapV = std::clamp(mapV, hv, 1 - hv);
 }
 
 void App::inputProfile() {
@@ -2038,6 +2128,37 @@ void App::drawTiles(const std::vector<SDL_Texture *> &tiles, int imgW, int imgH,
     }
 }
 
+// Draws the pieces of the sharpest needed level over the overview. x, y, w, h is the whole map on screen.
+void App::drawLevels(const std::string &image, const std::vector<MapLevel> &levels, int overviewW, float x, float y,
+                     float w, float h, int top, int bottom) {
+    if (levels.empty() || w <= overviewW * 1.1f || image.size() < 4)
+        return;
+    int k = 0;
+    while (k + 1 < (int)levels.size() && levels[k].w < w * 0.9f)
+        k++;
+    const MapLevel &lv = levels[k];
+    std::string stem = image.substr(0, image.size() - 4) + "/" + std::to_string(k) + "/";
+    int cols = (lv.w + kMapChunk - 1) / kMapChunk, rows = (lv.h + kMapChunk - 1) / kMapChunk;
+    float sx = w / lv.w, sy = h / lv.h;
+    int cx0 = std::max(0, int((0 - x) / sx) / kMapChunk), cx1 = std::min(cols - 1, int((1280 - x) / sx) / kMapChunk);
+    int cy0 = std::max(0, int((top - y) / sy) / kMapChunk), cy1 = std::min(rows - 1, int((bottom - y) / sy) / kMapChunk);
+    for (int cy = cy0; cy <= cy1; cy++)
+        for (int cx = cx0; cx <= cx1; cx++) {
+            if (!lv.have[cy * cols + cx])
+                continue;
+            SDL_Texture *tex = mapChunk(stem + std::to_string(cx) + "_" + std::to_string(cy) + ".jpg");
+            if (!tex)
+                continue;
+            int px = cx * kMapChunk, py = cy * kMapChunk;
+            int pw = std::min(kMapChunk, lv.w - px), ph = std::min(kMapChunk, lv.h - py);
+            float x0 = std::round(x + px * sx), x1 = std::round(x + (px + pw) * sx);
+            float y0 = std::round(y + py * sy), y1 = std::round(y + (py + ph) * sy);
+            SDL_FRect dst{x0, y0, x1 - x0, y1 - y0};
+            SDL_Rect src{0, 0, pw, ph};
+            ui.image(tex, &src, &dst);
+        }
+}
+
 void App::drawMapPicker() {
     int n = maps.size();
     const int gap = 12, cw = (1248 - gap * (kPickCols - 1)) / kPickCols, thumbH = 96, ch = 140;
@@ -2100,15 +2221,22 @@ void App::drawMaps() {
     SDL_Rect clipR{0, top, 1280, bottom - top};
     ui.clip(&clipR);
     ui.fill(0, top, 1280, bottom - top, col::bg);
+    mapFrame++;
+    chunkLoads = 0;
+    mapFrameStart = SDL_GetTicks();
     if (ensureMapTexture()) {
+        bool plan = mapPlan && !m->alt.empty();
         drawTiles(mapTiles, mapImgW, mapImgH, ox, oy, dw, dh, top, bottom);
+        drawLevels(plan ? m->alt : m->image, plan ? m->altLevels : m->levels, mapImgW, ox, oy, dw, dh, top, bottom);
         if (ensureFloorTexture()) {
             // Floor images carry the dimmed base inside their rect; dim the rest to match.
             const MapFloor &f = m->floors[mapFloor];
-            const float *r = mapPlan && !f.alt.empty() ? f.ar : f.r;
+            bool fplan = mapPlan && !f.alt.empty();
+            const float *r = fplan ? f.ar : f.r;
             ui.fill(int(ox), int(oy), int(dw) + 1, int(dh) + 1, SDL_Color{0, 0, 0, 140});
             drawTiles(floorTiles, floorImgW, floorImgH, ox + r[0] * dw, oy + r[1] * dh, (r[2] - r[0]) * dw,
                       (r[3] - r[1]) * dh, top, bottom);
+            drawLevels(fplan ? f.alt : f.image, fplan ? f.altLevels : f.levels, mapImgW, ox, oy, dw, dh, top, bottom);
         }
     } else {
         ui.text(40, top + 80, "Map image unavailable offline. Connect to download it once.", FS_BODY, col::dim);

@@ -446,6 +446,31 @@ bool applyTrackerProgress(const std::string &text, const HideoutData &data, Stat
     return true;
 }
 
+// Levels are [w, h, hex] with bit i of the hex number set when piece i exists.
+static std::vector<MapLevel> parseLevels(const json &j) {
+    std::vector<MapLevel> out;
+    if (!j.is_array())
+        return out;
+    for (const auto &l : j) {
+        if (!l.is_array() || l.size() != 3 || !l[2].is_string())
+            continue;
+        MapLevel lv;
+        lv.w = l[0].get<int>();
+        lv.h = l[1].get<int>();
+        int cols = (lv.w + kMapChunk - 1) / kMapChunk, rows = (lv.h + kMapChunk - 1) / kMapChunk;
+        lv.have.assign(cols * rows, false);
+        std::string hex = l[2].get<std::string>();
+        for (int i = 0; i < (int)lv.have.size() && i / 4 < (int)hex.size(); i++) {
+            char c = hex[hex.size() - 1 - i / 4];
+            int v = c >= 'a' ? c - 'a' + 10 : c >= 'A' ? c - 'A' + 10 : c - '0';
+            lv.have[i] = (v >> (i % 4)) & 1;
+        }
+        if (lv.w > 0 && lv.h > 0)
+            out.push_back(std::move(lv));
+    }
+    return out;
+}
+
 bool parseMaps(const std::string &text, std::vector<MapInfo> &out, std::string &err) {
     json j = json::parse(text, nullptr, false);
     if (j.is_discarded() || !j.is_object()) {
@@ -462,11 +487,15 @@ bool parseMaps(const std::string &text, std::vector<MapInfo> &out, std::string &
         mi.image = str(m, "img");
         mi.alt = str(m, "alt");
         mi.thumb = str(m, "thumb");
+        mi.levels = parseLevels(m.value("lv", json::array()));
+        mi.altLevels = parseLevels(m.value("alv", json::array()));
         for (const auto &f : m.value("floors", json::array())) {
             MapFloor fl;
             fl.name = str(f, "n");
             fl.image = str(f, "img");
             fl.alt = str(f, "alt");
+            fl.levels = parseLevels(f.value("lv", json::array()));
+            fl.altLevels = parseLevels(f.value("alv", json::array()));
             for (int k = 0; k < 4; k++) {
                 if (f.contains("r") && f["r"].size() == 4)
                     fl.r[k] = f["r"][k].get<float>();

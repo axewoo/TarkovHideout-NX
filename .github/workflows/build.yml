@@ -21,7 +21,9 @@ jobs:
         # Takes the files the data workflow published, so the NRO works offline
         # from the first launch. The app still downloads fresh data on its own.
         run: |
-          python3 tools/fetch_bundle.py romfs || {
+          git clone -q --depth 1 -b data "https://github.com/${{ github.repository }}" data-branch &&
+            rm -rf data-branch/.git && cp -r data-branch/. romfs/ && rm -rf data-branch && du -sh romfs ||
+            python3 tools/fetch_bundle.py romfs || {
             echo "::warning::data branch unavailable, bundling hideout data without icons or maps"
             python3 tools/build_data.py romfs || echo "::warning::tarkov.dev unreachable, NRO ships without bundled data"
           }

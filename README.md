@@ -108,7 +108,8 @@ Builds bundle a copy of everything for offline use.
 ## Building
 
 ```sh
-python3 tools/fetch_bundle.py romfs  # optional, bundles offline data, icons and maps
+# optional: bundle offline data, icons, map pieces and wiki pictures (a few hundred MB)
+git clone --depth 1 -b data https://github.com/axewoo/TarkovHideout-NX data && rm -rf data/.git && cp -r data/. romfs/
 docker run --rm -v "$PWD":/src -w /src devkitpro/devkita64 make
 ```
 
