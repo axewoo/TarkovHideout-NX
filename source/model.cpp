@@ -288,11 +288,29 @@ bool parseDatabase(const std::string &text, Database &out, std::string &err) {
                 q.rewards.skills.push_back({numberText(s[0]), s[1].is_number() ? s[1].get<int>() : 0});
         q.rewards.traders = strings(rw.value("tu", json::array()));
         q.startItems = itemCounts(t.value("st", json::array()));
+        // The own trader's loyalty level gates the quest; the game lists quests under it.
+        for (const auto &r : q.traderReqs)
+            if (r.size() > q.trader.size() + 3 && r.compare(0, q.trader.size() + 3, q.trader + " LL") == 0)
+                q.loyalty = std::max(1, atoi(r.c_str() + q.trader.size() + 3));
         // Quests come sorted in the game's trader order; keep it for the filter.
         if (std::find(d.traders.begin(), d.traders.end(), q.trader) == d.traders.end())
             d.traders.push_back(q.trader);
         d.quests.push_back(std::move(q));
     }
+    // Portraits, listed in the game's trader order (newer data only).
+    std::vector<std::string> order;
+    for (const auto &t : j.value("traders", json::array())) {
+        std::string n = str(t, "n");
+        if (n.empty() || std::find(d.traders.begin(), d.traders.end(), n) == d.traders.end())
+            continue;
+        order.push_back(n);
+        if (!str(t, "img").empty())
+            d.traderIcons[n] = str(t, "img");
+    }
+    for (const auto &n : d.traders)
+        if (std::find(order.begin(), order.end(), n) == order.end())
+            order.push_back(n);
+    d.traders = order;
     if (d.quests.empty() && d.items.empty()) {
         err = "database is empty";
         return false;
@@ -344,6 +362,8 @@ bool loadState(const std::string &path, State &st) {
     st.account = str(j, "account");
     st.profileId = str(j, "profileId");
     st.theme = str(j, "theme");
+    st.hideLocked = j.value("hideLocked", false);
+    st.playerLevel = num(j, "playerLevel");
     st.kappaFound.clear();
     for (const auto &k : j.value("kappaFound", json::array()))
         if (k.is_string())
@@ -382,6 +402,8 @@ bool saveState(const std::string &path, const State &st) {
     j["account"] = st.account;
     j["profileId"] = st.profileId;
     j["theme"] = st.theme;
+    j["hideLocked"] = st.hideLocked;
+    j["playerLevel"] = st.playerLevel;
     j["kappaFound"] = st.kappaFound;
     json mods = json::object();
     for (auto &[k, v] : st.modules)
@@ -453,6 +475,8 @@ bool applyTrackerProgress(const std::string &text, const HideoutData &data, Stat
         if (t.value("complete", false))
             st.tasksDone.insert(str(t, "id"));
     st.account = str(d, "displayName");
+    if (num(d, "playerLevel") > 0)
+        st.playerLevel = num(d, "playerLevel");
     return true;
 }
 

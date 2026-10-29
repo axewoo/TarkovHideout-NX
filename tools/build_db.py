@@ -299,8 +299,44 @@ class Db:
         print(f"[{self.mode}] database: {len(tasks)} quests, {len(ammo)} ammo, {len(keys)} keys, {len(items)} items, "
               f"{sum(1 for k in keys if 'pins' in k)} keys with lock positions, "
               f"{sum(1 for t in tasks for o in t['obj'] if 'pins' in o)} objectives with map pins")
+        # Traders that give quests, in the game's order, with their portrait (saved by save_trader_icons).
+        givers = {t["tr"] for t in tasks}
+        traders = []
+        for tr in sorted(self.traders.values(), key=lambda r: (TRADER_ORDER.index(r.get("name"))
+                                                               if r.get("name") in TRADER_ORDER else 99,
+                                                               r.get("name") or "")):
+            if tr.get("name") not in givers:
+                continue
+            slug = tr.get("normalizedName") or re.sub(r"[^a-z0-9]+", "-", tr["name"].lower())
+            traders.append({"n": tr["name"], "img": f"traders/{slug}.jpg", "src": tr.get("imageLink") or ""})
         return {"version": 1, "mode": "pvp" if self.mode == "regular" else self.mode, "items": items,
-                "ammo": ammo, "keys": keys, "tasks": tasks}
+                "ammo": ammo, "keys": keys, "tasks": tasks, "traders": traders}
+
+
+TRADER_ICON_PX = 128
+
+
+def save_trader_icons(db, out):
+    """Downloads each trader's portrait once as a square JPEG; drops traders whose picture fails."""
+    os.makedirs(os.path.join(out, "traders"), exist_ok=True)
+    kept = []
+    for tr in db.get("traders", []):
+        src = tr.pop("src", "")
+        path = os.path.join(out, tr["img"])
+        if not os.path.exists(path) and src:
+            print(f"  trader icon {tr['n']}: {src}")
+            try:
+                im = Image.open(io.BytesIO(a.fetch_bytes(src))).convert("RGBA")
+                bg = Image.new("RGBA", im.size, a.CELL_RGB + (255,))
+                bg.alpha_composite(im)
+                bg.convert("RGB").resize((TRADER_ICON_PX, TRADER_ICON_PX), Image.LANCZOS).save(path, quality=88)
+            except Exception as e:  # noqa: BLE001
+                print(f"  trader icon {tr['n']} failed: {e}", file=sys.stderr)
+        if not os.path.exists(path):
+            tr.pop("img")
+        kept.append(tr)
+    db["traders"] = kept
+    print(f"trader icons: {sum('img' in t for t in kept)} of {len(kept)}")
 
 
 def wiki_title(link):

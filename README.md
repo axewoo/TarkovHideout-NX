@@ -19,6 +19,7 @@ Hideout planner, craft timers, sharp interactive maps, an ammo chart, a Kappa tr
 - **Craft timers** that keep running while the Switch sleeps.
 - **16 maps built from the game's own renders**, sharp up to 16x zoom, with extracts, transits, boss spawns and every floor of the multi-level maps.
 - **An ammo tab** with an eft-ammo style damage vs penetration chart. Pin rounds to compare them.
+- **A quest screen like the game's**: trader portraits, quests grouped by loyalty level, and a side panel with requirements, objectives and rewards. Hide the quests you can't take yet once you sync.
 - **Quest database** with wiki guides, pictures included, next to objectives, map pins and rewards.
 - **Kappa tracker** for every Collector item, saved as you find them, with Kappa quest progress.
 - **13 color themes** with a live-preview picker: OLED, Catppuccin, Nord, Dracula, Gruvbox, Light and more.
@@ -79,7 +80,7 @@ The PC version is the same app with the same tabs, data and TarkovTracker sync, 
 
   | Key | Action |
   | --- | --- |
-  | 1 to 9, 0 | Jump to a tab |
+  | 1 to 9 | Jump to a tab |
   | Q / E, Tab | Previous / next tab |
   | Arrows, Enter, Esc | Move, select, back |
   | PgUp / PgDn | Same as ZL / ZR (floors, sections, levels) |
@@ -122,7 +123,7 @@ Progress and downloads stay in the app's private storage and are kept across upd
 <td><img src="docs/screenshots/timers.jpg" alt="Timers"></td>
 </tr>
 <tr>
-<td><b>Crafts</b>. Recipes at the stations you've built, filterable by station. A starts a timer.</td>
+<td><b>Crafts</b>. Inside the Stations tab: press - or tap Crafts at the top. Recipes at the stations you've built, filterable by station. A starts a timer.</td>
 <td><b>Timers</b>. Running and finished crafts. Collect or cancel them here.</td>
 </tr>
 </table>
@@ -168,7 +169,7 @@ Every round with damage, penetration, armor damage and fragmentation, filterable
 <td width="50%"><img src="docs/screenshots/quest.jpg" alt="Quest page"></td>
 </tr>
 <tr>
-<td><b>Quests</b>. Every quest by trader. Quests completed on TarkovTracker are marked.</td>
+<td><b>Quests</b>. Laid out like the game's trader screen: pick a trader from the portraits, quests are grouped by loyalty level, and the panel on the right shows what the selected quest needs and pays. Quests done on TarkovTracker are hidden unless you tick Show completed (X). After a sync, Show locked (-) hides quests you can't take yet.</td>
 <td><b>Quest page</b>. The wiki guide with its pictures on the left. Requirements, objectives (with Gunsmith build specs), map pins and rewards on the right.</td>
 </tr>
 <tr>
@@ -218,6 +219,10 @@ Settings > Theme opens a picker with 13 themes: Tarkov, OLED, Catppuccin Mocha a
 2. In the app, open Settings, choose the token row and enter the token.
 3. The app syncs right away and on every launch (you can turn that off).
 
+**Quest progress from the game.** The app never reads the game, but [TarkovMonitor](https://github.com/the-hideout/TarkovMonitor) can: it runs on the gaming PC, watches the game's logs and ticks quests on TarkovTracker as you accept and finish them, and the app picks them up on its next sync. TarkovMonitor only sees quests from the moment it runs, so tick the ones you had already finished, and set your level, on tarkovtracker.org once.
+
+**Hide quests I can't take yet** (Settings, or - on the quest list) needs a sync. A quest counts as locked while a quest before it isn't done, or your level is below what it asks. Your level is the higher of TarkovTracker's and your tarkov.dev profile's. Trader loyalty isn't synced anywhere, so loyalty requirements are shown but don't lock.
+
 TarkovTracker's API is read-only for the hideout, so sync merges: levels and item counts from TarkovTracker are added to yours, and anything you set in the app is kept, even when TarkovTracker has no hideout progress. Use X on the Stations tab to undo a level.
 
 ## Controls
@@ -236,6 +241,7 @@ Switch buttons. On PC, see [PC second screen](#pc-second-screen) for the mouse a
 | Item counts | A / X / Y | +1 / -1 / all or none |
 | Needed items | Left / Right | Page through the list |
 | Needed items | Y | Show only found-in-raid items |
+| Stations | - | Switch between stations and crafts |
 | Crafts | Left / Right | Filter by station |
 | Crafts | A | Start a timer, or collect a finished one |
 | Crafts, Timers | X | Cancel a timer |
@@ -254,8 +260,10 @@ Switch buttons. On PC, see [PC second screen](#pc-second-screen) for the mouse a
 | Ammo | ZL / ZR | Page through the list |
 | Ammo | Y / X | Search / clear search, then clear the chart |
 | Database | ZL / ZR | Switch section |
-| Database | Left / Right | Trader filter (page in Keys and Items) |
+| Database | Left / Right | Pick a trader (page in Keys and Items) |
 | Database | Y / X | Search / clear search |
+| Quests | X | Show or hide completed quests |
+| Quests | - | Show or hide locked quests (after a sync) |
 | Database | A | Open quest, show key lock on the map |
 | Quest page | Up / Down, A | Pick an objective or item, show it on the map |
 | Quest page | Right stick, ZL / ZR | Scroll the guide |

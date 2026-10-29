@@ -14,6 +14,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -30,9 +31,10 @@
 #define TRACKER_API "https://api.tarkovtracker.org"
 #define PROFILE_API "https://players.tarkov.dev/"
 
-enum Tab { TAB_STATIONS, TAB_ITEMS, TAB_CRAFTS, TAB_TIMERS, TAB_MAPS, TAB_AMMO, TAB_DATABASE, TAB_KAPPA, TAB_PROFILE,
-           TAB_SETTINGS, TAB_COUNT };
-static const char *kTabNames[TAB_COUNT] = {"Stations", "Needed", "Crafts", "Timers", "Maps", "Ammo", "Database", "Kappa",
+// Crafts live inside Stations (minus switches between the two views).
+enum Tab { TAB_STATIONS, TAB_ITEMS, TAB_TIMERS, TAB_MAPS, TAB_AMMO, TAB_DATABASE, TAB_KAPPA, TAB_PROFILE, TAB_SETTINGS,
+           TAB_COUNT };
+static const char *kTabNames[TAB_COUNT] = {"Stations", "Needed", "Timers", "Maps", "Ammo", "Database", "Kappa",
                                            "Profile", "Settings"};
 
 enum DbSection { DB_QUESTS, DB_KEYS, DB_ITEMS, DB_COUNT };
@@ -548,6 +550,12 @@ private:
     void drawDatabase();
     void drawDbHeader();
     void drawQuestList();
+    void drawTraderStrip(int y);
+    void drawQuestDetail(const Quest &q, int x, int y, int w, int h);
+    bool questLocked(const Quest &q) const;
+    bool hidingLocked() const { return st.hideLocked && !st.lastSync.empty(); }
+    int knownPlayerLevel() const;
+    SDL_Texture *picture(std::map<std::string, SDL_Texture *> &cache, const std::string &path, bool &missing);
     void drawAmmo();
     void drawAmmoChart(int x, int y, int w, int h);
     void drawAmmoDetail(const Ammo &a, int x, int y, int w);
@@ -560,6 +568,7 @@ private:
     void drawSettings();
     void drawScrollbar(int x, int y, int h, int count, int visible, int scroll);
     int drawBadge(int x, int y, const std::string &s, SDL_Color c);
+    int drawHideoutSwitch(int x, int y);
 
     // Kappa: the Collector quest's items
     void ensureKappa();
@@ -622,6 +631,7 @@ private:
     State st;
     bool running = true;
     Tab tab = TAB_STATIONS;
+    bool craftsView = false;
 
     ListView stationList;
     ListView reqList;
@@ -692,8 +702,13 @@ private:
     std::string ammoSearch;
     bool ammoDirty = true;
     std::string dbSearch;
-    int dbFilter = 0;  // trader or caliber index + 1, 0 = all
+    int dbFilter = 1;  // quest giver index + 1, 0 = all
     bool dbDirty = true;
+    bool showDoneQuests = false;
+    int questScroll = 0;                     // in list lines, headers included
+    std::set<std::string> questDoneNames;
+    std::vector<int> traderDone, traderTotal;  // per db.traders entry
+    std::map<std::string, SDL_Texture *> traderPics;  // portraits; null = unavailable
     std::vector<int> dbRows;                 // indices into quests, ammo or keys
     std::vector<std::string> dbItemRows;     // item ids for the Items section
     std::vector<std::string> itemsByName;
@@ -1032,6 +1047,7 @@ void App::syncTracker() {
     }
     st.lastSync = nowString();
     needDirty = true;
+    dbDirty = true;
     save();
     std::string who = st.account.empty() ? std::string("progress") : st.account;
     std::string mode = st.mode == "pve" ? "PVE" : "PVP";
@@ -1225,9 +1241,15 @@ void App::input() {
     if (needDirty)
         rebuildNeeded();
     switch (tab) {
-    case TAB_STATIONS: inputStations(); break;
+    case TAB_STATIONS:
+        if (in.pressed(HidNpadButton_Minus)) {
+            craftsView = !craftsView;
+            reqFocus = false;
+            break;
+        }
+        craftsView ? inputCrafts() : inputStations();
+        break;
     case TAB_ITEMS: inputItems(); break;
-    case TAB_CRAFTS: inputCrafts(); break;
     case TAB_TIMERS: inputTimers(); break;
     case TAB_MAPS: inputMaps(); break;
     case TAB_AMMO: inputAmmo(); break;
@@ -1726,7 +1748,7 @@ void App::inputProfile() {
         skillScroll = std::min(std::max(0, n - 12), skillScroll + 1);
 }
 
-enum SettingRow { SET_TOKEN, SET_SYNC, SET_SYNC_LAUNCH, SET_PROFILE, SET_MODE, SET_THEME, SET_ZOOM, SET_DOWNLOAD,
+enum SettingRow { SET_TOKEN, SET_SYNC, SET_SYNC_LAUNCH, SET_HIDE_LOCKED, SET_PROFILE, SET_MODE, SET_THEME, SET_ZOOM, SET_DOWNLOAD,
                   SET_PICTURES, SET_RESET, SET_COUNT };
 
 // The rows shown: interface zoom only where the window can change size.
@@ -1764,6 +1786,15 @@ void App::inputSettings() {
     case SET_SYNC: syncTracker(); break;
     case SET_SYNC_LAUNCH:
         st.syncOnLaunch = !st.syncOnLaunch;
+        save();
+        break;
+    case SET_HIDE_LOCKED:
+        if (st.lastSync.empty() && !st.hideLocked) {
+            setStatus("Sync with TarkovTracker first, so the app knows which quests you've done", col::warn);
+            break;
+        }
+        st.hideLocked = !st.hideLocked;
+        dbDirty = true;
         save();
         break;
     case SET_PROFILE: editProfileId(); break;
@@ -1827,6 +1858,11 @@ bool App::wheelList() {
     int n = 0;
     switch (tab) {
     case TAB_STATIONS:
+        if (craftsView) {
+            lv = &craftList;
+            n = visibleCrafts().size();
+            break;
+        }
         if (data.stations.empty())
             break;
         stationList.clampSel(data.stations.size());
@@ -1847,7 +1883,6 @@ bool App::wheelList() {
         }
         break;
     case TAB_ITEMS: lv = &itemList; n = needed.size(); break;
-    case TAB_CRAFTS: lv = &craftList; n = visibleCrafts().size(); break;
     case TAB_TIMERS: lv = &timerList; n = st.timers.size(); break;
     case TAB_AMMO: lv = &ammoList; n = ammoRows.size(); break;
     case TAB_SETTINGS: lv = &settingsList; n = settingRows().size(); confirmReset = false; break;
@@ -2211,15 +2246,42 @@ void App::filterDb() {
     dbItemRows.clear();
     std::string q = lower(dbSearch);
     switch (dbSection) {
-    case DB_QUESTS:
+    case DB_QUESTS: {
+        if (dbFilter > (int)db.traders.size())
+            dbFilter = 0;
+        questDoneNames.clear();
+        for (const auto &qu : db.quests)
+            if (st.tasksDone.count(qu.id))
+                questDoneNames.insert(qu.name);
+        std::map<std::string, int> rank;
+        for (int i = 0; i < (int)db.traders.size(); i++)
+            rank[db.traders[i]] = i;
+        traderDone.assign(db.traders.size(), 0);
+        traderTotal.assign(db.traders.size(), 0);
+        // A search looks through every trader and shows done and locked quests too.
+        bool searching = !q.empty();
         for (int i = 0; i < (int)db.quests.size(); i++) {
             const Quest &qu = db.quests[i];
-            if (dbFilter > 0 && qu.trader != db.traders[dbFilter - 1])
+            bool done = st.tasksDone.count(qu.id) > 0;
+            int r = rank[qu.trader];
+            traderTotal[r]++;
+            traderDone[r] += done;
+            if (!searching && dbFilter > 0 && r != dbFilter - 1)
                 continue;
-            if (matches(qu.name, q) || matches(qu.map, q))
-                dbRows.push_back(i);
+            if (!matches(qu.name, q) && !matches(qu.map, q))
+                continue;
+            if (!searching && ((done && !showDoneQuests) || (hidingLocked() && questLocked(qu))))
+                continue;
+            dbRows.push_back(i);
         }
+        // Grouped like the game: trader, then loyalty level, then player level.
+        std::stable_sort(dbRows.begin(), dbRows.end(), [&](int a, int b) {
+            const Quest &x = db.quests[a], &y = db.quests[b];
+            return std::make_tuple(rank[x.trader], x.loyalty, x.level, x.name) <
+                   std::make_tuple(rank[y.trader], y.loyalty, y.level, y.name);
+        });
         break;
+    }
     case DB_KEYS:
         for (int i = 0; i < (int)db.keys.size(); i++)
             if (matches(itemName(db.keys[i].item), q))
@@ -2318,7 +2380,6 @@ void App::inputDatabase() {
     if (in.pressed(HidNpadButton_ZL) || in.pressed(HidNpadButton_ZR)) {
         int d = in.pressed(HidNpadButton_ZR) ? 1 : -1;
         dbSection = (dbSection + d + DB_COUNT) % DB_COUNT;
-        dbFilter = 0;
         dbList = ListView();
         dbDirty = true;
         return;
@@ -2335,6 +2396,20 @@ void App::inputDatabase() {
         dbSearch.clear();
         dbList = ListView();
         dbDirty = true;
+    } else if (in.pressed(HidNpadButton_X) && dbSection == DB_QUESTS) {
+        showDoneQuests = !showDoneQuests;
+        dbList = ListView();
+        dbDirty = true;
+    }
+    if (in.pressed(HidNpadButton_Minus) && dbSection == DB_QUESTS) {
+        if (st.lastSync.empty()) {
+            setStatus("Sync with TarkovTracker first, so the app knows which quests you've done", col::warn);
+        } else {
+            st.hideLocked = !st.hideLocked;
+            dbList = ListView();
+            dbDirty = true;
+            save();
+        }
     }
     int nf = filterCount(dbSection, db);
     if (nf > 0 && (in.left() || in.right())) {
@@ -2428,9 +2503,14 @@ std::vector<std::string> App::guideLines(const std::string &text, int width) {
 
 // Loads a guide picture from the SD card or romfs, downloading it from the data branch once.
 SDL_Texture *App::wikiPicture(const std::string &path, bool &missing) {
+    return picture(wikiPics, path, missing);
+}
+
+// A data picture from the SD copy, the romfs bundle, or downloaded in the background.
+SDL_Texture *App::picture(std::map<std::string, SDL_Texture *> &cache, const std::string &path, bool &missing) {
     missing = false;
-    auto it = wikiPics.find(path);
-    if (it != wikiPics.end()) {
+    auto it = cache.find(path);
+    if (it != cache.end()) {
         missing = !it->second;
         return it->second;
     }
@@ -2445,7 +2525,7 @@ SDL_Texture *App::wikiPicture(const std::string &path, bool &missing) {
     else if (fetcher.request(path) == Fetcher::PENDING)
         return nullptr;
     SDL_Texture *t = file.empty() ? nullptr : ui.loadImage(file);
-    wikiPics[path] = t;
+    cache[path] = t;
     missing = !t;
     return t;
 }
@@ -2605,7 +2685,6 @@ void App::inputQuest() {
             // Jump to the item in the Items section.
             dbSection = DB_ITEMS;
             dbSearch = itemName(r.item);
-            dbFilter = 0;
             dbList = ListView();
             dbDirty = true;
             openQuest = -1;
@@ -2720,6 +2799,24 @@ void App::drawEmpty(const std::string &title, const std::string &sub) {
     ui.text(40, kTop + 60, sub, FS_SMALL, col::dim, kW - 80);
 }
 
+// "Stations | Crafts" at the top of the Stations tab; returns its width.
+int App::drawHideoutSwitch(int x, int y) {
+    const char *names[2] = {"Stations", "Crafts"};
+    int w0 = x;
+    for (int i = 0; i < 2; i++) {
+        bool on = (i == 1) == craftsView;
+        int w = ui.measure(names[i], FS_SMALL) + 32;
+        ui.fill(x, y, w, 32, on ? col::accent : col::cell);
+        ui.text(x + 16, y + 5, names[i], FS_SMALL, on ? col::bg : col::dim);
+        onTap(x, y, w, 32, [this, i](int) {
+            if ((i == 1) != craftsView)
+                press(HidNpadButton_Minus);
+        });
+        x += w;
+    }
+    return x - w0;
+}
+
 void App::drawStations() {
     if (data.empty()) {
         drawEmpty("No hideout data loaded.", "Go to Settings and choose \"Download latest hideout data\".");
@@ -2727,12 +2824,14 @@ void App::drawStations() {
         return;
     }
     const int rowH = 46;
-    int visible = (kBottom - kTop) / rowH;
+    drawHideoutSwitch(16, kTop - 6);
+    const int listTop = kTop + 38;
+    int visible = (kBottom - listTop) / rowH;
     stationList.clamp(data.stations.size(), visible);
     for (int i = 0; i < visible && stationList.scroll + i < (int)data.stations.size(); i++) {
         int idx = stationList.scroll + i;
         const Station &s = data.stations[idx];
-        int y = kTop + i * rowH;
+        int y = listTop + i * rowH;
         bool on = idx == stationList.sel;
         onTap(16, y, 424, rowH - 4, [this, idx](int) {
             if (stationList.sel != idx) {
@@ -2757,7 +2856,7 @@ void App::drawStations() {
         std::string lv = maxed ? "MAX" : std::to_string(built) + " / " + std::to_string(maxLv);
         ui.textRight(428, y + 10, lv, FS_SMALL, maxed ? col::good : col::dim);
     }
-    drawScrollbar(446, kTop, visible * rowH, data.stations.size(), visible, stationList.scroll);
+    drawScrollbar(446, listTop, visible * rowH, data.stations.size(), visible, stationList.scroll);
 
     const Station &s = data.stations[stationList.sel];
     int built = st.builtLevel(s);
@@ -2838,7 +2937,7 @@ void App::drawStations() {
     if (reqFocus)
         drawFooter({{"A", "+1"}, {"X", "-1"}, {"Y", "All/none"}, {"B", "Back"}});
     else
-        drawFooter({{"A", "Build"}, {"X", "Undo"}, {"ZL/ZR", "Level"}, {">", "Items"}});
+        drawFooter({{"A", "Build"}, {"X", "Undo"}, {"ZL/ZR", "Level"}, {">", "Items"}, {"-", "Crafts"}});
 }
 
 void App::drawItems() {
@@ -2884,8 +2983,9 @@ void App::drawItems() {
 void App::drawCrafts() {
     auto list = visibleCrafts();
     std::string filter = craftFilter == 0 ? "Crafts at your built stations" : data.stations[craftFilter - 1].name;
-    int fw = ui.text(28, kTop - 4, "<  " + filter + "  >", FS_BODY, col::accent);
-    filterTaps(20, kTop - 8, fw + 16, 36);
+    int sx = 16 + drawHideoutSwitch(16, kTop - 6) + 20;
+    int fw = ui.text(sx, kTop - 4, "<  " + filter + "  >", FS_BODY, col::accent);
+    filterTaps(sx - 8, kTop - 8, fw + 16, 36);
     ui.textRight(kW - 28, kTop, std::to_string(list.size()) + " recipes", FS_SMALL, col::dim);
     int top = kTop + 36;
     int rowH = 72;
@@ -2933,7 +3033,7 @@ void App::drawCrafts() {
         }
     }
     drawScrollbar(kW - 18, top, visible * rowH, list.size(), visible, craftList.scroll);
-    drawFooter({{"A", "Start/collect"}, {"X", "Cancel"}, {"</>", "Station"}});
+    drawFooter({{"A", "Start/collect"}, {"X", "Cancel"}, {"</>", "Station"}, {"-", "Stations"}});
 }
 
 void App::drawTimers() {
@@ -2943,7 +3043,7 @@ void App::drawTimers() {
     int visible = (kBottom - kTop) / rowH;
     timerList.clamp(st.timers.size(), visible);
     if (st.timers.empty())
-        drawEmpty("No crafts running.", "Start one from the Crafts tab and it will count down here, even while the app is closed.");
+        drawEmpty("No crafts running.", "Start one from Stations > Crafts (press -) and it will count down here, even while the app is closed.");
     int64_t now = time(nullptr);
     for (int i = 0; i < visible && timerList.scroll + i < (int)st.timers.size(); i++) {
         int idx = timerList.scroll + i;
@@ -3275,7 +3375,6 @@ void App::drawDbHeader() {
             if (dbSection == i)
                 return;
             dbSection = i;
-            dbFilter = 0;
             dbList = ListView();
             dbDirty = true;
         });
@@ -3284,11 +3383,19 @@ void App::drawDbHeader() {
     }
     ui.hint(x + 6, kTop - 3, "ZL/ZR", "");
     x += std::max(90, ui.hintsWidth("ZL/ZR", "") + 24);
-    int nf = filterCount(dbSection, db);
-    if (nf > 0) {
-        std::string f = dbFilter == 0 ? "All traders" : db.traders[dbFilter - 1];
-        int fw = ui.text(x, kTop - 4, "<  " + f + "  >", FS_BODY, col::accent, 300);
-        filterTaps(x - 8, kTop - 8, fw + 16, 36);
+    if (dbSection == DB_QUESTS) {
+        // The game's two checkboxes; locked quests stay shown until a sync says which are done.
+        auto box = [&](const std::string &label, bool on, bool enabled, u64 button) {
+            SDL_Color c = enabled ? col::text : col::faint;
+            ui.rect(x, kTop - 1, 22, 22, enabled ? col::dim : col::faint);
+            if (on)
+                ui.fill(x + 5, kTop + 4, 12, 12, enabled ? col::accent : col::faint);
+            int w = 32 + ui.text(x + 32, kTop - 2, label, FS_SMALL, c);
+            onTap(x - 6, kTop - 8, w + 12, 36, [this, button](int) { press(button); });
+            x += w + 28;
+        };
+        box("Show completed", showDoneQuests, true, HidNpadButton_X);
+        box("Show locked", !hidingLocked(), !st.lastSync.empty(), HidNpadButton_Minus);
     }
     if (!dbSearch.empty()) {
         int bw = drawBadge(kW - 24 - ui.measure("Search: " + dbSearch, FS_SMALL) - 14, kTop - 2, "Search: " + dbSearch,
@@ -3297,46 +3404,250 @@ void App::drawDbHeader() {
     }
 }
 
+// TarkovTracker's level is often left at 1, so the tarkov.dev profile wins when it is higher.
+int App::knownPlayerLevel() const {
+    int fromProfile = profile.empty() ? 0 : data.playerLevel(profile.exp);
+    return std::max(st.playerLevel, fromProfile);
+}
+
+// Locked: a quest before it is still to do, or the player is below its level. Unknown before a sync.
+bool App::questLocked(const Quest &q) const {
+    if (st.lastSync.empty() || st.tasksDone.count(q.id))
+        return false;
+    int lv = knownPlayerLevel();
+    if (lv > 0 && q.level > lv)
+        return true;
+    for (const auto &p : q.prereqs)
+        if (!questDoneNames.count(p))
+            return true;
+    return false;
+}
+
+// Trader portraits across the top, like the game's trader screen, with quests done per trader.
+void App::drawTraderStrip(int y) {
+    int n = db.traders.size() + 1;
+    int cw = std::min(116, (kW - 32) / n);
+    int x = 16 + std::max(0, (kW - 32 - cw * n) / 2);
+    const int pic = std::min(64, cw - 16);
+    for (int i = 0; i < n; i++) {
+        bool on = i == dbFilter && dbSearch.empty();
+        int cx = x + i * cw;
+        onTap(cx, y, cw, 96, [this, i](int) {
+            dbFilter = i;
+            dbList = ListView();
+            dbDirty = true;
+        });
+        if (on)
+            ui.fill(cx + 2, y, cw - 4, 96, col::panelHi);
+        int px = cx + (cw - pic) / 2;
+        SDL_Texture *t = nullptr;
+        bool missing = true;
+        if (i > 0) {
+            auto it = db.traderIcons.find(db.traders[i - 1]);
+            if (it != db.traderIcons.end())
+                t = picture(traderPics, it->second, missing);
+        }
+        if (t) {
+            SDL_FRect dst{float(px), float(y + 6), float(pic), float(pic)};
+            ui.image(t, nullptr, &dst);
+        } else {
+            // "All", or a trader whose portrait isn't there: initials on a tile.
+            ui.fill(px, y + 6, pic, pic, col::cell);
+            std::string label = i == 0 ? "ALL" : db.traders[i - 1].substr(0, 2);
+            ui.text(px + pic / 2 - ui.measure(label, FS_SMALL) / 2, y + 6 + pic / 2 - 12, label, FS_SMALL, col::dim);
+        }
+        ui.rect(px - 1, y + 5, pic + 2, pic + 2, on ? col::accent : col::line);
+        if (on)
+            ui.fill(cx + 2, y + 93, cw - 4, 3, col::accent);
+        int done = 0, total = 0;
+        for (size_t k = 0; k < traderTotal.size(); k++)
+            if (i == 0 || (int)k == i - 1) {
+                done += traderDone[k];
+                total += traderTotal[k];
+            }
+        std::string count = std::to_string(done) + "/" + std::to_string(total);
+        SDL_Color c = total > 0 && done == total ? col::good : (on ? col::text : col::dim);
+        ui.text(cx + cw / 2 - ui.measure(count, FS_SMALL) / 2, y + pic + 9, count, FS_SMALL, c);
+    }
+}
+
 void App::drawQuestList() {
-    const int rowH = 58, top = kTop + 40;
+    int stripY = kTop + 34;
+    drawTraderStrip(stripY);
+    const int rowH = 40, top = stripY + 104;
+    const int lw = std::min(520, kW * 2 / 5);
     int visible = (kBottom - top) / rowH;
-    dbList.clamp(dbRows.size(), visible);
-    if (dbRows.empty())
-        ui.text(28, top + 10, "No quests match.", FS_BODY, col::dim);
-    for (int i = 0; i < visible && dbList.scroll + i < (int)dbRows.size(); i++) {
-        int idx = dbList.scroll + i;
-        const Quest &q = db.quests[dbRows[idx]];
+    dbList.clampSel(dbRows.size());
+
+    // One line per quest, with a header above each loyalty level (and trader when several show).
+    struct Line {
+        int quest = -1;  // position in dbRows, -1 for a header
+        std::string label;
+    };
+    std::vector<Line> lines;
+    bool several = dbFilter == 0 || !dbSearch.empty();
+    std::string last;
+    int selLine = 0;
+    for (int k = 0; k < (int)dbRows.size(); k++) {
+        const Quest &q = db.quests[dbRows[k]];
+        std::string head = (several ? q.trader + "   " : "") + "LOYALTY LEVEL " + std::to_string(q.loyalty);
+        if (head != last) {
+            lines.push_back({-1, head});
+            last = head;
+        }
+        if (k == dbList.sel)
+            selLine = lines.size();
+        lines.push_back({k, ""});
+    }
+    int nl = lines.size();
+    if (selLine < questScroll + 1)
+        questScroll = selLine > 0 && lines[selLine - 1].quest < 0 ? selLine - 1 : selLine;
+    if (selLine >= questScroll + visible)
+        questScroll = selLine - visible + 1;
+    questScroll = std::clamp(questScroll, 0, std::max(0, nl - visible));
+
+    if (dbRows.empty()) {
+        std::string why = !dbSearch.empty()           ? "No quests match."
+                          : traderTotal.empty()       ? "No quest data loaded."
+                          : hidingLocked()            ? "Nothing to take here right now."
+                                                      : "All done here.";
+        ui.text(28, top + 10, why, FS_BODY, col::dim, lw - 30);
+        if (dbSearch.empty() && !traderTotal.empty() && !showDoneQuests)
+            ui.text(28, top + 46, "Press X to show completed quests.", FS_SMALL, col::faint, lw - 30);
+    }
+    for (int i = 0; i < visible && questScroll + i < nl; i++) {
+        const Line &L = lines[questScroll + i];
         int y = top + i * rowH;
+        if (L.quest < 0) {
+            ui.text(28, y + 12, L.label, FS_SMALL, col::accent, lw - 30);
+            ui.fill(28, y + rowH - 4, lw - 30, 1, col::line);
+            continue;
+        }
+        int idx = L.quest;
+        const Quest &q = db.quests[dbRows[idx]];
         bool on = idx == dbList.sel;
         bool done = st.tasksDone.count(q.id) > 0;
-        onTap(16, y, kW - 40, rowH - 6, [this, idx](int n) { listTap(dbList, idx, n); });
-        ui.fill(16, y, kW - 40, rowH - 6, on ? col::panelHi : col::panel);
+        bool locked = !done && questLocked(q);
+        onTap(16, y, lw - 14, rowH - 4, [this, idx](int n) { listTap(dbList, idx, n); });
+        ui.fill(16, y, lw - 14, rowH - 4, on ? col::panelHi : col::panel);
         if (on)
-            ui.fill(16, y, 4, rowH - 6, col::accent);
-        ui.text(32, y + 2, q.name, FS_BODY, done ? col::dim : col::text, 640);
-        std::string sub = q.trader + (q.level > 1 ? "   Level " + std::to_string(q.level) : "") +
-                          (q.map.empty() ? "" : "   " + q.map);
-        ui.text(32, y + 28, sub, FS_SMALL, col::dim, 640);
-        int bx = kW - 40;
-        auto badge = [&](const std::string &t, SDL_Color c) {
-            int w = ui.measure(t, FS_SMALL) + 14;
-            bx -= w + 8;
-            drawBadge(bx, y + 14, t, c);
-        };
-        if (done)
-            badge("DONE", col::good);
+            ui.fill(16, y, 4, rowH - 4, col::accent);
+        // Status mark: done, locked (a small padlock) or ready to take.
+        int my = y + (rowH - 4) / 2;
+        if (done) {
+            ui.disc(36, my, 7, col::good);
+        } else if (locked) {
+            ui.rect(32, my - 9, 9, 8, col::faint);
+            ui.fill(29, my - 2, 15, 10, col::faint);
+        } else {
+            ui.disc(36, my, 7, col::accent);
+            ui.disc(36, my, 4, on ? col::panelHi : col::panel);
+        }
+        int right = lw - 10;
         if (q.kappa)
-            badge("Kappa", col::accent);
-        if (q.lightkeeper)
-            badge("Lightkeeper", col::violet);
-        bool pinned = false;
-        for (const auto &o : q.objectives)
-            pinned |= !o.pins.empty();
-        if (pinned)
-            badge("Map", col::warn);
+            right -= drawBadge(right - ui.measure("K", FS_SMALL) - 14, y + 6, "K", col::accent) + 6;
+        if (q.level > 1)
+            right -= ui.textRight(right - 4, y + 7, "Lv " + std::to_string(q.level), FS_SMALL,
+                                  locked && knownPlayerLevel() > 0 && q.level > knownPlayerLevel() ? col::bad : col::dim) + 10;
+        ui.text(54, y + 6, q.name, FS_BODY, done ? col::dim : (locked ? col::faint : col::text), right - 60);
     }
-    drawScrollbar(kW - 18, top, visible * rowH, dbRows.size(), visible, dbList.scroll);
-    drawFooter({{"A", "Open"}, {"Y", "Search"}, {"</>", "Trader"}, {"ZL/ZR", "Section"}});
+    drawScrollbar(lw + 4, top, visible * rowH, nl, visible, questScroll);
+    if (!dbRows.empty())
+        drawQuestDetail(db.quests[dbRows[dbList.sel]], lw + 20, top, kW - lw - 36, kBottom - top);
+    std::string x = !dbSearch.empty() ? "Clear search" : (showDoneQuests ? "Hide done" : "Show done");
+    drawFooter({{"A", "Open"}, {"X", x}, {"Y", "Search"}, {"</>", "Trader"}, {"ZL/ZR", "Section"}});
+}
+
+// The game's right-hand pane: who gives it, what it needs, what to do and what it pays.
+void App::drawQuestDetail(const Quest &q, int x, int y, int w, int h) {
+    ui.fill(x, y, w, h, col::panel);
+    int bottom = y + h - 10;
+    bool done = st.tasksDone.count(q.id) > 0;
+    bool locked = !done && questLocked(q);
+    int tx = x + 16;
+    auto it = db.traderIcons.find(q.trader);
+    bool missing;
+    SDL_Texture *t = it == db.traderIcons.end() ? nullptr : picture(traderPics, it->second, missing);
+    if (t) {
+        SDL_FRect dst{float(x + 14), float(y + 14), 56.f, 56.f};
+        ui.image(t, nullptr, &dst);
+        tx = x + 84;
+    }
+    ui.text(tx, y + 10, q.name, FS_TITLE, col::text, x + w - tx - 16);
+    std::string sub = q.trader + "   Loyalty level " + std::to_string(q.loyalty) +
+                      (q.map.empty() ? "" : "   " + q.map);
+    ui.text(tx, y + 46, sub, FS_SMALL, col::dim, x + w - tx - 16);
+    int cy = y + 82, bx = x + 16;
+    bx += drawBadge(bx, cy, done ? "DONE" : locked ? "LOCKED" : st.lastSync.empty() ? "NOT SYNCED" : "AVAILABLE",
+                    done ? col::good : locked ? col::faint : st.lastSync.empty() ? col::dim : col::accent) + 8;
+    if (q.kappa)
+        bx += drawBadge(bx, cy, "Kappa", col::accent) + 8;
+    if (q.lightkeeper)
+        bx += drawBadge(bx, cy, "Lightkeeper", col::violet) + 8;
+    if (!q.faction.empty() && q.faction != "Any")
+        bx += drawBadge(bx, cy, q.faction, col::info) + 8;
+    cy += 38;
+
+    bool cut = false;
+    auto head = [&](const std::string &s) {
+        if (cut || cy > bottom - 60) {
+            cut = true;
+            return;
+        }
+        cy += 6;
+        ui.text(x + 16, cy, s, FS_SMALL, col::accent);
+        cy += 28;
+    };
+    auto line = [&](const std::string &s, SDL_Color c) {
+        for (const auto &l : ui.wrap(s, FS_SMALL, w - 56)) {
+            if (cut || cy > bottom - 26) {
+                cut = true;
+                return;
+            }
+            ui.text(x + 36, cy, l, FS_SMALL, c);
+            cy += 24;
+        }
+    };
+    int lv = knownPlayerLevel();
+    bool reqs = q.level > 1 || !q.prereqs.empty() || q.traderReqs.size() > 0;
+    if (reqs) {
+        head("REQUIREMENTS");
+        if (q.level > 1)
+            line("Level " + std::to_string(q.level) + (lv > 0 ? "   (you are " + std::to_string(lv) + ")" : ""),
+                 lv == 0 ? col::text : lv >= q.level ? col::good : col::bad);
+        for (const auto &p : q.prereqs) {
+            bool ok = questDoneNames.count(p) > 0;
+            line((ok ? "Done: " : "Complete ") + p, st.lastSync.empty() ? col::text : ok ? col::good : col::bad);
+        }
+        for (const auto &r : q.traderReqs)
+            line(r, col::text);
+    }
+    if (!q.startItems.empty()) {
+        head("INITIAL EQUIPMENT");
+        for (const auto &s : q.startItems)
+            line(itemName(s.item) + (s.count > 1 ? " x" + groupDigits(s.count) : ""), col::text);
+    }
+    head("OBJECTIVES");
+    for (const auto &o : q.objectives)
+        line(o.desc + (o.optional ? " (optional)" : ""), o.optional ? col::dim : col::text);
+    head("REWARDS");
+    if (q.exp > 0)
+        line("+" + groupDigits(q.exp) + " EXP", col::text);
+    for (const auto &r : q.rewards.rep) {
+        char b[64];
+        snprintf(b, sizeof b, "%+.2f ", r.second);
+        line(b + r.first + " standing", col::text);
+    }
+    for (const auto &i : q.rewards.items)
+        line(itemName(i.item) + (i.count > 1 ? " x" + groupDigits(i.count) : ""), col::text);
+    for (const auto &u : q.rewards.unlocks)
+        line("Unlocks " + itemName(u.item) + " at " + u.trader + " LL" + std::to_string(u.level), col::dim);
+    for (const auto &s : q.rewards.skills)
+        line("+" + std::to_string(s.second) + " " + s.first, col::dim);
+    for (const auto &tr : q.rewards.traders)
+        line("Unlocks trader " + tr, col::violet);
+    if (cut)
+        ui.text(x + 16, bottom - 22, "More on the quest page (A)", FS_SMALL, col::faint);
 }
 
 // Colors for rounds pinned to the chart.
@@ -4042,6 +4353,7 @@ void App::drawSettings() {
         {"TarkovTracker token", tok},
         {"Sync from TarkovTracker now", st.lastSync.empty() ? "never synced" : "last " + st.lastSync},
         {"Sync on launch", st.syncOnLaunch ? "On" : "Off"},
+        {"Hide quests I can't take yet", st.lastSync.empty() ? "Off (sync first)" : st.hideLocked ? "On" : "Off"},
         {"tarkov.dev profile ID", st.profileId.empty() ? "not set" : st.profileId},
         {"Game mode", st.mode == "pve" ? "PVE" : "PVP"},
         {"Theme", themes()[themeIndex(st.theme)].name},
@@ -4140,9 +4452,8 @@ void App::draw() {
     if (!(tab == TAB_MAPS && mapFull && !maps.empty()))
         drawHeader();
     switch (tab) {
-    case TAB_STATIONS: drawStations(); break;
+    case TAB_STATIONS: craftsView ? drawCrafts() : drawStations(); break;
     case TAB_ITEMS: drawItems(); break;
-    case TAB_CRAFTS: drawCrafts(); break;
     case TAB_TIMERS: drawTimers(); break;
     case TAB_MAPS: drawMaps(); break;
     case TAB_AMMO: drawAmmo(); break;

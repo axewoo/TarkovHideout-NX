@@ -2,7 +2,7 @@
 """Copies the small part of the data branch that a Lite build bundles.
 
 Lite builds (the Lite NRO and the Android app) ship the hideout, quest, ammo and
-item data, the icon atlases and the map picker thumbnails. Map images, sharp map
+item data, the icon atlases, trader portraits and the map picker thumbnails. Map images, sharp map
 pieces and wiki pictures download the first time they are viewed.
 
 usage: bundle_lite.py <data branch checkout> <output folder>
@@ -22,6 +22,9 @@ def main():
             for name in ("thumb.jpg", "meta.json"):
                 if (d / name).is_file():
                     files.append(d / name)
+    traders = src / "traders"
+    if traders.is_dir():
+        files += sorted(traders.glob("*.jpg"))
     listed = []
     for f in sorted(files):
         rel = f.relative_to(src).as_posix()
