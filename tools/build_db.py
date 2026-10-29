@@ -21,6 +21,8 @@ WIKI_MAX = 9000
 DESC_MAX = 220
 PINS_MAX = 16
 
+TRADER_ORDER = ["Prapor", "Therapist", "Fence", "Skier", "Peacekeeper", "Mechanic", "Ragman", "Jaeger", "Ref",
+                "Lightkeeper", "BTR Driver"]
 SHORT_CALIBERS = {"46", "57", "68", "86", "93"}
 BUILD_ATTRS = [
     ("ergonomics", "Ergonomics"), ("recoil", "Recoil sum"), ("weight", "Weight"), ("durability", "Durability"),
@@ -217,7 +219,10 @@ class Db:
         return out
 
     def build(self):
-        tasks = sorted((self.task(t) for t in self.tasks), key=lambda t: (t["tr"], t["lvl"], t["n"]))
+        def order(t):
+            rank = TRADER_ORDER.index(t["tr"]) if t["tr"] in TRADER_ORDER else len(TRADER_ORDER)
+            return rank, t["tr"], t["lvl"], t["n"]
+        tasks = sorted((self.task(t) for t in self.tasks), key=order)
         key_quests = {}
         for t in tasks:
             for k in t.get("keys", []):
