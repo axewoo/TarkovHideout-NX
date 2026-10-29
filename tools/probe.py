@@ -1,44 +1,68 @@
 #!/usr/bin/env python3
 """Prints the shape of upstream payloads the data build depends on (CI debugging aid)."""
 import json, sys, urllib.request
+from collections import Counter
 sys.path.insert(0, __file__.rsplit('/', 1)[0])
 import build_data as b
 
 def show(label, obj, n=1500):
-    print(f"--- {label}: {json.dumps(obj)[:n]}")
+    print(f"--- {label}: {json.dumps(obj, ensure_ascii=False)[:n]}")
 
-maps = b.fetch_translated("pve", "maps")
-show("maps keys", list(maps.keys()) if isinstance(maps, dict) else type(maps).__name__, 300)
-recs = b.records(maps.get("maps") if isinstance(maps, dict) else maps)
-print("map count", len(recs))
-for m in recs[:40]:
-    print("map", m.get("id"), m.get("normalizedName"), m.get("name"), sorted(m.keys()))
-cust = next((m for m in recs if m.get("normalizedName") == "customs"), recs[0] if recs else {})
-for k in ("extracts", "transits", "bosses", "spawns"):
-    v = cust.get(k)
-    show(f"customs.{k} ({len(v) if isinstance(v, list) else type(v).__name__})", v[:3] if isinstance(v, list) else v, 1200)
+def get(url):
+    req = urllib.request.Request(url, headers={"User-Agent": b.USER_AGENT})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return r.status, r.headers.get("Content-Type"), r.read()
+
+tasks_raw = b.fetch_json("pve/tasks")
+show("tasks top keys", list(tasks_raw.keys()), 300)
+show("tasks translations", tasks_raw.get("translations"), 600)
+tasks = b.fetch_translated("pve", "tasks")
+show("tasks data type", type(tasks).__name__ + (str(list(tasks.keys())[:10]) if isinstance(tasks, dict) else ""), 300)
+recs = b.records(tasks.get("tasks") if isinstance(tasks, dict) and "tasks" in tasks else tasks)
+print("task count", len(recs))
+first = recs[0] if recs else {}
+show("task keys", sorted(first.keys()), 1000)
+show("task sample", first, 3000)
+types = Counter()
+for t in recs:
+    for o in t.get("objectives") or []:
+        types[o.get("type")] += 1
+print("objective types", dict(types))
+seen = set()
+for t in recs:
+    for o in t.get("objectives") or []:
+        ty = o.get("type")
+        if ty in seen:
+            continue
+        seen.add(ty)
+        show(f"objective {ty} (task {t.get('name')})", o, 1500)
+gs = next((t for t in recs if "Gunsmith" in str(t.get("name"))), None)
+if gs:
+    show("gunsmith task", gs, 4000)
+show("rewards sample", {k: first.get(k) for k in ("startRewards", "finishRewards", "failureRewards", "experience")}, 1500)
+
 items = b.fetch_translated("pve", "items")
-show("items keys", list(items.keys()), 400)
-first = next(iter(b.records(items.get("items"))), {})
-show("item sample", {k: first.get(k) for k in ("id", "name", "shortName", "iconLink", "gridImageLink", "baseImageLink", "width", "height", "backgroundColor")})
-show("playerLevels", (items.get("playerLevels") or [])[:3])
-show("skills", (items.get("skills") or [])[:3] if isinstance(items.get("skills"), list) else items.get("skills"), 600)
-for url in ("https://players.tarkov.dev/profile/8560316.json", "https://players.tarkov.dev/pve/8560316.json"):
+its = b.records(items.get("items"))
+ammo = next((i for i in its if "ammo" in (i.get("types") or []) or i.get("properties", {}).get("__typename") == "ItemPropertiesAmmo"), None)
+show("ammo item", ammo, 2500)
+key = next((i for i in its if "keys" in (i.get("types") or [])), None)
+show("key item", key, 2000)
+show("item keys", sorted(its[0].keys()) if its else None, 1000)
+for ep in ("pve/item_prices", "pve/prices", "pve/barters"):
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": b.USER_AGENT})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            p = json.loads(r.read())
-        show(f"{url} top keys", sorted(p.keys()), 600)
-        show("info", p.get("info"), 800)
-        show("skills.Common[:3]", (p.get("skills") or {}).get("Common", [])[:3], 500)
-        show("pmcStats", p.get("pmcStats"), 1200)
-        show("updated", p.get("updated"), 100)
-        h = p.get("hideout") or {}
-        show("hideout keys", sorted(h.keys()) if isinstance(h, dict) else type(h).__name__, 400)
-        if isinstance(h, dict):
-            for k, v in h.items():
-                show(f"hideout.{k}", v[:3] if isinstance(v, list) else v, 700)
-        show("achievements", dict(list((p.get("achievements") or {}).items())[:3]) if isinstance(p.get("achievements"), dict) else p.get("achievements"), 300)
-        show("scavStats", p.get("scavStats"), 400)
+        d = b.fetch_json(ep)
+        show(ep, {k: (v if not isinstance(v, (list, dict)) else str(v)[:600]) for k, v in d.items()}, 1200)
     except Exception as e:
-        print("profile fetch failed", url, e)
+        print("endpoint failed", ep, e)
+
+for url in ("https://escapefromtarkov.fandom.com/api.php?action=parse&page=Gunsmith_-_Part_1&prop=wikitext&format=json",
+            "https://escapefromtarkov.fandom.com/api.php?action=query&prop=extracts&explaintext=1&titles=Debut&format=json",
+            "https://escapefromtarkov.fandom.com/wiki/Debut?action=raw",
+            "https://escapefromtarkov.wiki.gg/api.php?action=parse&page=Debut&prop=wikitext&format=json",
+            "https://wiki.escapefromtarkov.com/api.php?action=parse&page=Debut&prop=wikitext&format=json"):
+    try:
+        st, ct, body = get(url)
+        print("wiki", st, ct, len(body), url)
+        print("   ", body[:1500].decode("utf-8", "replace").replace("\n", "\\n"))
+    except Exception as e:
+        print("wiki failed", url, e)
