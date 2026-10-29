@@ -50,6 +50,9 @@ std::vector<SDL_GameController *> gPads;
 std::vector<char> gFont;
 bool gSwallow = false;  // keys still held from the text box are not new presses
 bool gWindowDirty = false;
+int gZoom = 100;
+int gLayoutW = 1280, gLayoutH = 720;
+const char *kViewFile = "view.cfg";
 Uint32 gWindowSaved = 0;
 
 const char *kWindowFile = "window.cfg";
@@ -97,7 +100,13 @@ void handleKey(const SDL_KeyboardEvent &k) {
     }
     if (k.repeat)
         return;
-    if (ctrl() && key == SDLK_q)
+    if (ctrl() && (key == SDLK_MINUS || key == SDLK_KP_MINUS))
+        nxSetZoom(gZoom - 10);
+    else if (ctrl() && (key == SDLK_EQUALS || key == SDLK_PLUS || key == SDLK_KP_PLUS))
+        nxSetZoom(gZoom + 10);
+    else if (ctrl() && (key == SDLK_0 || key == SDLK_KP_0))
+        nxSetZoom(100);
+    else if (ctrl() && key == SDLK_q)
         gInjected |= HidNpadButton_Plus;
     else if (ctrl() && key == SDLK_f)
         gInjected |= HidNpadButton_Y;
@@ -105,6 +114,8 @@ void handleKey(const SDL_KeyboardEvent &k) {
         gInjected |= (SDL_GetModState() & KMOD_SHIFT) ? HidNpadButton_L : HidNpadButton_R;
     else if (!ctrl() && key >= SDLK_1 && key <= SDLK_9)
         gTabKey = key - SDLK_1;
+    else if (!ctrl() && key == SDLK_0)
+        gTabKey = 9;
 }
 
 void pump() {
@@ -118,14 +129,22 @@ void pump() {
         switch (e.type) {
         case SDL_QUIT: gQuit = true; break;
         case SDL_KEYDOWN: handleKey(e.key); break;
-        case SDL_MOUSEWHEEL:
+        case SDL_MOUSEWHEEL: {
             gMode = MODE_KEYS;
+            int flip = e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1 : 1;
+            if (ctrl()) {
+                // Ctrl+wheel sizes the interface, like a browser.
+                if (e.wheel.y)
+                    nxSetZoom(gZoom + (e.wheel.y * flip > 0 ? 10 : -10));
+                break;
+            }
 #if SDL_VERSION_ATLEAST(2, 0, 18)
-            gWheel += e.wheel.preciseY * (e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1 : 1);
+            gWheel += e.wheel.preciseY * flip;
 #else
-            gWheel += e.wheel.y * (e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1 : 1);
+            gWheel += e.wheel.y * flip;
 #endif
             break;
+        }
         case SDL_MOUSEBUTTONDOWN:
             gMode = e.button.which == SDL_TOUCH_MOUSEID ? MODE_TOUCH : MODE_KEYS;
             if (gPinching && e.button.which == SDL_TOUCH_MOUSEID)
@@ -187,8 +206,8 @@ void pump() {
                 gPinching = true;
                 gMouseDown = false;
                 gWheel += e.mgesture.dDist * 14;
-                gMouseX = int(e.mgesture.x * 1280);
-                gMouseY = int(e.mgesture.y * 720);
+                gMouseX = int(e.mgesture.x * gLayoutW);
+                gMouseY = int(e.mgesture.y * gLayoutH);
                 gMouseIn = true;
             }
             break;
@@ -358,6 +377,16 @@ static void unpackAssets(const std::string &dir) {
 #endif
 
 Result romfsInit() {
+#if defined(__linux__) && !defined(__ANDROID__)
+    // On a Wayland desktop with display scaling, an X11 window is stretched by the compositor
+    // and looks blurry. SDL's own Wayland support (2.0.22 and later take a list) draws at the
+    // screen's real resolution and falls back to X11.
+    SDL_version v;
+    SDL_GetVersion(&v);
+    if (SDL_getenv("WAYLAND_DISPLAY") && !SDL_getenv("SDL_VIDEODRIVER") &&
+        SDL_VERSIONNUM(v.major, v.minor, v.patch) >= SDL_VERSIONNUM(2, 0, 22))
+        SDL_SetHint("SDL_VIDEODRIVER", "wayland,x11");
+#endif
     SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
 #ifdef __ANDROID__
@@ -455,18 +484,49 @@ const std::string &nxButtonLabel(const std::string &button) {
     return it == names.end() ? button : it->second;
 }
 
+void nxLayoutSize(int &w, int &h) {
+    w = 1280;
+    h = 720;
+    int ow, oh;
+    if (gRenderer && SDL_GetRendererOutputSize(gRenderer, &ow, &oh) == 0 && ow > 0 && oh > 0) {
+        // The zoom shrinks everything from the size that fits the window; the layout grows to
+        // fill what that frees, and to fill a window that is not 16:9.
+        float s = std::min(ow / 1280.f, oh / 720.f) * gZoom / 100.f;
+        w = std::max(1280, int(ow / s + 0.5f));
+        h = std::max(720, int(oh / s + 0.5f));
+    }
+    gLayoutW = w;
+    gLayoutH = h;
+}
+
 float nxUiScale() {
     if (!gRenderer)
         return 1;
-    int w, h;
+    int w, h, lw, lh;
     if (SDL_GetRendererOutputSize(gRenderer, &w, &h) != 0)
         return 1;
-    return std::max(0.25f, std::min(w / 1280.f, h / 720.f));
+    nxLayoutSize(lw, lh);
+    return std::max(0.25f, std::min(float(w) / lw, float(h) / lh));
+}
+
+int nxZoom() {
+    return gZoom;
+}
+
+void nxSetZoom(int percent) {
+    percent = std::clamp(percent, 50, 100);
+    if (percent == gZoom)
+        return;
+    gZoom = percent;
+    std::ofstream(kViewFile, std::ios::trunc) << gZoom << '\n';
 }
 
 void nxWindowCreated(SDL_Window *window, SDL_Renderer *renderer) {
     gWindow = window;
     gRenderer = renderer;
+    std::ifstream view(kViewFile);
+    if (int z; view >> z)
+        gZoom = std::clamp(z, 50, 100);
     SDL_RenderSetLogicalSize(renderer, 1280, 720);
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
     if (SDL_Surface *icon = IMG_Load((gBase + "icon.png").c_str())) {
@@ -564,7 +624,7 @@ Result swkbdShow(SwkbdConfig *c, char *out, size_t outSize) {
     std::string text = c->initial;
     bool done = false, ok = false;
     // High on the screen so an on-screen keyboard leaves it visible; OK and Cancel are tappable.
-    const int bx = 190, by = 70, bw = 900, bh = 230;
+    const int bw = 900, bh = 230, bx = (gLayoutW - bw) / 2, by = 70;
     const SDL_Rect okR{bx + bw - 288, by + bh - 66, 120, 46}, cancelR{bx + bw - 156, by + bh - 66, 128, 46};
     SDL_StartTextInput();
     while (!done) {

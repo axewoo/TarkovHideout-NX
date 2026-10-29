@@ -74,6 +74,9 @@ public:
     int lineHeight(FontSize fs) const { return lineH[fs]; }
     // Window pixels per layout pixel; above 1 when a desktop window is bigger than 1280 x 720.
     float pixelScale() const { return scale; }
+    // Layout size this frame: 1280 x 720 on the Switch, larger in a desktop window or zoomed out.
+    int width() const { return layoutW; }
+    int height() const { return layoutH; }
     // Splits text into lines no wider than w, keeping explicit line breaks.
     std::vector<std::string> wrap(const std::string &s, FontSize fs, int w);
 
@@ -98,6 +101,7 @@ private:
     const void *fontData = nullptr;
     int fontSize = 0;
     float scale = 1;
+    int layoutW = 1280, layoutH = 720;
     int lineH[FS_COUNT] = {};
     std::unordered_map<std::string, Cached> cache;
     unsigned frame = 0;
