@@ -44,8 +44,16 @@ bool Ui::init() {
     return true;
 }
 
-// A window larger than the 1280 x 720 layout renders text from bigger fonts so it stays sharp.
+// The layout follows the window shape and zoom, and a window with more pixels than the layout
+// renders text from bigger fonts so it stays sharp.
 void Ui::updateScale() {
+    int lw, lh;
+    nxLayoutSize(lw, lh);
+    if (lw != layoutW || lh != layoutH) {
+        layoutW = lw;
+        layoutH = lh;
+        SDL_RenderSetLogicalSize(renderer, lw, lh);
+    }
     float s = nxUiScale();
     if (std::fabs(s - scale) < 0.01f)
         return;

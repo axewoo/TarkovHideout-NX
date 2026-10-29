@@ -39,10 +39,13 @@ enum DbSection { DB_QUESTS, DB_KEYS, DB_ITEMS, DB_COUNT };
 static const char *kDbNames[DB_COUNT] = {"Quests", "Keys", "Items"};
 static const int kMaxIconPages = 8;
 
+// The layout is 1280 x 720 on the Switch. In a desktop window or on a tablet it grows to fill
+// the window's shape and the zoom setting; kW, kH and the bottoms follow it every frame.
+static int kW = 1280, kH = 720;
 static const int kTop = 68;
-static const int kBottom = 664;
+static int kBottom = 664;
 static const int kMapTop = 50;
-static const int kMapBottom = 676;
+static int kMapBottom = 676;
 static const int kMapTile = 2048;
 
 // Looked up per draw so they follow the theme.
@@ -573,6 +576,7 @@ private:
     std::vector<std::string> questText;
     int textScroll = 0;
     int questView = 0; // 0 guide + details, 1 guide only, 2 details only
+    int questLayoutW = 0; // layout width the guide was wrapped for
     std::map<std::string, SDL_Texture *> wikiPics; // guide pictures of the open quest; null = unavailable
     std::vector<QRow> qrows;
     int qrowSel = -1;
@@ -1446,22 +1450,25 @@ void App::freeMapTiles() {
 
 void App::mapViewport(int &top, int &bottom) const {
     top = mapFull ? 0 : kMapTop;
-    bottom = mapFull ? 720 : kMapBottom;
+    bottom = mapFull ? kH : kMapBottom;
 }
 
-static const int kPickCols = 4;
+// Four columns at 1280 wide, more in a wider layout.
+static int pickCols() {
+    return std::max(4, (kW - 20) / 315);
+}
 
 void App::inputMapPicker() {
     int n = maps.size();
     pickSel = std::clamp(pickSel, 0, n - 1);
-    if (in.left() && pickSel % kPickCols > 0)
+    if (in.left() && pickSel % pickCols() > 0)
         pickSel--;
-    if (in.right() && pickSel % kPickCols < kPickCols - 1 && pickSel + 1 < n)
+    if (in.right() && pickSel % pickCols() < pickCols() - 1 && pickSel + 1 < n)
         pickSel++;
-    if (in.up() && pickSel >= kPickCols)
-        pickSel -= kPickCols;
-    if (in.downDir() && pickSel + kPickCols < n)
-        pickSel += kPickCols;
+    if (in.up() && pickSel >= pickCols())
+        pickSel -= pickCols();
+    if (in.downDir() && pickSel + pickCols() < n)
+        pickSel += pickCols();
     if (in.pressed(HidNpadButton_A))
         openMap(pickSel);
 }
@@ -1523,7 +1530,7 @@ void App::inputMaps() {
     const MapInfo *m = currentMap();
     int top, bottom;
     mapViewport(top, bottom);
-    float viewW = 1280, viewH = bottom - top;
+    float viewW = kW, viewH = bottom - top;
     float fit = std::min(viewW / m->w, viewH / m->h);
     float scale = fit * mapZoom;
     float pan = 14.f / scale;
@@ -1547,7 +1554,7 @@ void App::zoomMap(float factor, float ax, float ay) {
         return;
     int top, bottom;
     mapViewport(top, bottom);
-    float viewW = 1280, viewH = bottom - top;
+    float viewW = kW, viewH = bottom - top;
     float fit = std::min(viewW / m->w, viewH / m->h);
     auto origin = [&](float zoom, float &ox, float &oy) {
         float dw = m->w * fit * zoom, dh = m->h * fit * zoom;
@@ -1578,25 +1585,40 @@ void App::inputProfile() {
         skillScroll = std::min(std::max(0, n - 12), skillScroll + 1);
 }
 
-enum SettingRow { SET_TOKEN, SET_SYNC, SET_SYNC_LAUNCH, SET_PROFILE, SET_MODE, SET_THEME, SET_DOWNLOAD, SET_PICTURES,
-                  SET_RESET, SET_COUNT };
+enum SettingRow { SET_TOKEN, SET_SYNC, SET_SYNC_LAUNCH, SET_PROFILE, SET_MODE, SET_THEME, SET_ZOOM, SET_DOWNLOAD,
+                  SET_PICTURES, SET_RESET, SET_COUNT };
+
+// The rows shown: interface zoom only where the window can change size.
+static std::vector<int> settingRows() {
+    std::vector<int> rows;
+    for (int i = 0; i < SET_COUNT; i++)
+        if (i != SET_ZOOM || nxDesktop())
+            rows.push_back(i);
+    return rows;
+}
 
 void App::inputSettings() {
     if (themePicking) {
         inputThemePicker();
         return;
     }
+    auto rows = settingRows();
+    int n = rows.size();
     if (in.up()) {
-        settingsList.move(-1, SET_COUNT);
+        settingsList.move(-1, n);
         confirmReset = false;
     }
     if (in.downDir()) {
-        settingsList.move(1, SET_COUNT);
+        settingsList.move(1, n);
         confirmReset = false;
     }
+    settingsList.clampSel(n);
+    int row = rows[settingsList.sel];
+    if (row == SET_ZOOM && (in.left() || in.right()))
+        nxSetZoom(nxZoom() + (in.right() ? 10 : -10));
     if (!in.pressed(HidNpadButton_A))
         return;
-    switch (settingsList.sel) {
+    switch (row) {
     case SET_TOKEN: editToken(); break;
     case SET_SYNC: syncTracker(); break;
     case SET_SYNC_LAUNCH:
@@ -1620,6 +1642,7 @@ void App::inputSettings() {
         themePicking = true;
         themeBefore = themeSel = themeIndex(st.theme);
         break;
+    case SET_ZOOM: nxSetZoom(nxZoom() <= 50 ? 100 : nxZoom() - 10); break;
     case SET_RESET:
         if (!confirmReset) {
             confirmReset = true;
@@ -1686,7 +1709,7 @@ bool App::wheelList() {
     case TAB_CRAFTS: lv = &craftList; n = visibleCrafts().size(); break;
     case TAB_TIMERS: lv = &timerList; n = st.timers.size(); break;
     case TAB_AMMO: lv = &ammoList; n = ammoRows.size(); break;
-    case TAB_SETTINGS: lv = &settingsList; n = SET_COUNT; confirmReset = false; break;
+    case TAB_SETTINGS: lv = &settingsList; n = settingRows().size(); confirmReset = false; break;
     case TAB_DATABASE:
         if (openQuest < 0) {
             lv = &dbList;
@@ -1720,11 +1743,11 @@ void App::pointerInput() {
             }
     }
     if (in.wheel != 0) {
-        int px = 640, py = 360;
+        int px = kW / 2, py = kH / 2;
         bool over = nxPointer(px, py);
         if (tab == TAB_MAPS && mapPicked && !maps.empty()) {
-            zoomMap(std::pow(1.25f, in.wheel), over ? px : 640, over ? py : 360);
-        } else if (tab == TAB_DATABASE && openQuest >= 0 && questView != 2 && px < (questView == 1 ? 1264 : 624)) {
+            zoomMap(std::pow(1.25f, in.wheel), over ? px : kW / 2, over ? py : kH / 2);
+        } else if (tab == TAB_DATABASE && openQuest >= 0 && questView != 2 && px < (questView == 1 ? kW - 16 : kW / 2 - 16)) {
             wheelGuide -= in.wheel * 3;
         } else {
             wheelAcc -= in.wheel * 3;
@@ -1735,7 +1758,7 @@ void App::pointerInput() {
     }
     // Dragging a finger (or the mouse) over a list scrolls it like the wheel; maps pan instead.
     if (in.touching && in.touchDY && !(tab == TAB_MAPS && mapPicked)) {
-        if (tab == TAB_DATABASE && openQuest >= 0 && questView != 2 && in.touchX < (questView == 1 ? 1264 : 624)) {
+        if (tab == TAB_DATABASE && openQuest >= 0 && questView != 2 && in.touchX < (questView == 1 ? kW - 16 : kW / 2 - 16)) {
             wheelGuide -= in.touchDY / 26.f;
         } else {
             dragAcc -= in.touchDY / (tab == TAB_MAPS ? 150.f : 46.f);
@@ -1786,7 +1809,7 @@ void App::inputThemePicker() {
 void App::drawThemePicker() {
     const auto &list = themes();
     int n = list.size();
-    const int gap = 12, cw = (1248 - gap * (kThemeCols - 1)) / kThemeCols, ch = 138;
+    const int gap = 12, cw = (kW - 32 - gap * (kThemeCols - 1)) / kThemeCols, ch = 138;
     for (int i = 0; i < n; i++) {
         const Theme &t = list[i];
         int x = 16 + i % kThemeCols * (cw + gap), y = kTop - 8 + i / kThemeCols * (ch + gap);
@@ -1828,7 +1851,10 @@ void App::drawThemePicker() {
 
 // ---------------------------------------------------------------- kappa
 
-static const int kKappaCols = 10;
+// Ten columns at 1280 wide, more in a wider layout.
+static int kappaCols() {
+    return std::max(10, (kW - 24) / 125);
+}
 
 void App::ensureKappa() {
     ensureDb();
@@ -1871,10 +1897,10 @@ void App::inputKappa() {
         kappaSel--;
     if (in.right() && kappaSel + 1 < n)
         kappaSel++;
-    if (in.up() && kappaSel >= kKappaCols)
-        kappaSel -= kKappaCols;
-    if (in.downDir() && kappaSel + kKappaCols < n)
-        kappaSel += kKappaCols;
+    if (in.up() && kappaSel >= kappaCols())
+        kappaSel -= kappaCols();
+    if (in.downDir() && kappaSel + kappaCols() < n)
+        kappaSel += kappaCols();
     if (in.pressed(HidNpadButton_A)) {
         const std::string &id = kappaItems[rows[kappaSel]];
         if (st.kappaFound.count(id))
@@ -1905,26 +1931,27 @@ void App::drawKappa() {
         }
 
     // Progress strip: Collector items, then the quests the Kappa container needs.
-    ui.fill(16, kTop - 8, 1248, 56, col::panel);
+    const int mid = kW * 19 / 32;
+    ui.fill(16, kTop - 8, kW - 32, 56, col::panel);
     ui.fill(16, kTop - 8, 4, 56, col::accent);
     int w = ui.text(34, kTop - 2, "Collector", FS_BODY, col::text);
     ui.text(34 + w + 14, kTop + 2, done ? "complete on TarkovTracker" : "items found in raid", FS_SMALL, col::dim);
     std::string cnt = std::to_string(found) + " / " + std::to_string(total);
-    ui.textRight(760, kTop - 2, cnt, FS_BODY, found == total ? col::good : col::accent);
-    ui.progress(34, kTop + 34, 726, 6, total ? float(found) / total : 0, found == total ? col::good : col::accent);
-    ui.text(800, kTop - 2, "Kappa quests", FS_SMALL, col::dim);
+    ui.textRight(mid, kTop - 2, cnt, FS_BODY, found == total ? col::good : col::accent);
+    ui.progress(34, kTop + 34, mid - 34, 6, total ? float(found) / total : 0, found == total ? col::good : col::accent);
+    ui.text(mid + 40, kTop - 2, "Kappa quests", FS_SMALL, col::dim);
     std::string kqs = st.tasksDone.empty() ? "sync to see" : std::to_string(kqDone) + " / " + std::to_string(kq);
-    ui.textRight(1248, kTop - 2, kqs, FS_SMALL, col::text);
-    ui.progress(800, kTop + 34, 448, 6, kq ? float(kqDone) / kq : 0, col::info);
+    ui.textRight(kW - 32, kTop - 2, kqs, FS_SMALL, col::text);
+    ui.progress(mid + 40, kTop + 34, kW - 72 - mid, 6, kq ? float(kqDone) / kq : 0, col::info);
     static const char *filters[] = {"All items", "Still needed", "Found"};
 
     auto rows = kappaRows();
-    const int gap = 8, cw = (1248 - gap * (kKappaCols - 1)) / kKappaCols, ch = 112, top = kTop + 58;
+    const int gap = 8, cw = (kW - 32 - gap * (kappaCols() - 1)) / kappaCols(), ch = 112, top = kTop + 58;
     const int detailH = 70;
     int visible = std::max(1, (kBottom - top - detailH + gap) / (ch + gap));
-    int nrows = (rows.size() + kKappaCols - 1) / kKappaCols;
+    int nrows = (rows.size() + kappaCols() - 1) / kappaCols();
     kappaSel = std::clamp(kappaSel, 0, std::max(0, (int)rows.size() - 1));
-    int selRow = kappaSel / kKappaCols;
+    int selRow = kappaSel / kappaCols();
     if (selRow < kappaScroll)
         kappaScroll = selRow;
     if (selRow >= kappaScroll + visible)
@@ -1933,9 +1960,9 @@ void App::drawKappa() {
     if (rows.empty())
         ui.text(34, top + 20, kappaFilter == 1 ? "Nothing left to find. Go get that Kappa!" : "No items marked found yet.",
                 FS_BODY, col::dim);
-    for (int k = kappaScroll * kKappaCols; k < (int)rows.size() && k < (kappaScroll + visible) * kKappaCols; k++) {
+    for (int k = kappaScroll * kappaCols(); k < (int)rows.size() && k < (kappaScroll + visible) * kappaCols(); k++) {
         const std::string &id = kappaItems[rows[k]];
-        int x = 16 + k % kKappaCols * (cw + gap), y = top + (k / kKappaCols - kappaScroll) * (ch + gap);
+        int x = 16 + k % kappaCols() * (cw + gap), y = top + (k / kappaCols() - kappaScroll) * (ch + gap);
         bool on = k == kappaSel, have = done || st.kappaFound.count(id);
         onTap(x, y, cw, ch, [this, k](int taps) {
             kappaSel = k;
@@ -1960,11 +1987,11 @@ void App::drawKappa() {
         if (on)
             ui.rect(x, y, cw, ch, col::accent);
     }
-    drawScrollbar(1268, top, visible * (ch + gap) - gap, nrows, visible, kappaScroll);
+    drawScrollbar(kW - 12, top, visible * (ch + gap) - gap, nrows, visible, kappaScroll);
 
     // The highlighted item.
     int dy = kBottom - detailH + 6;
-    ui.fill(16, dy, 1248, detailH - 6, col::panel);
+    ui.fill(16, dy, kW - 32, detailH - 6, col::panel);
     if (!rows.empty()) {
         const std::string &id = kappaItems[rows[kappaSel]];
         bool have = done || st.kappaFound.count(id);
@@ -1974,8 +2001,8 @@ void App::drawKappa() {
         std::string price = it && it->price ? "Flea " + groupDigits(it->price) + " RUB" : "Not sold on flea";
         if (it && !it->trader.empty())
             price += "   " + it->trader + " pays " + groupDigits(it->traderPrice) + " RUB";
-        ui.text(92, dy + 36, price, FS_SMALL, col::dim, 800);
-        drawBadge(1248 - ui.measure(have ? "Found in raid" : "Still needed", FS_SMALL) - 14, dy + 18,
+        ui.text(92, dy + 36, price, FS_SMALL, col::dim, kW - 480);
+        drawBadge(kW - 32 - ui.measure(have ? "Found in raid" : "Still needed", FS_SMALL) - 14, dy + 18,
                   have ? "Found in raid" : "Still needed", have ? col::good : col::warn);
     }
     bool have = !rows.empty() && (done || st.kappaFound.count(kappaItems[rows[kappaSel]]));
@@ -2226,7 +2253,8 @@ void App::layoutQuest() {
     std::string text = it != wiki.end() ? it->second : "";
     questText = text.empty() ? std::vector<std::string>{"No wiki guide cached for this quest.",
                                                           "Download the latest data in Settings to get the guides."}
-                             : guideLines(text, questView == 1 ? 1200 : 560);
+                             : guideLines(text, questView == 1 ? kW - 80 : kW / 2 - 80);
+    questLayoutW = kW;
     buildQuestRows(q);
 }
 
@@ -2306,7 +2334,7 @@ void App::dropWikiPictures() {
 
 void App::buildQuestRows(const Quest &q) {
     qrows.clear();
-    const int w = questView == 2 ? 1160 : 540;
+    const int w = questView == 2 ? kW - 120 : kW / 2 - 100;
     auto head = [&](const std::string &t) {
         QRow r{QRow::HEAD};
         r.text = t;
@@ -2467,8 +2495,8 @@ int App::drawBadge(int x, int y, const std::string &s, SDL_Color c) {
 
 void App::drawHeader() {
     // One compact bar: tabs only. The Profile tab carries the player name and game mode.
-    ui.fill(0, 0, 1280, 46, col::bgTop);
-    ui.fill(0, 0, 1280, 2, col::accent);
+    ui.fill(0, 0, kW, 46, col::bgTop);
+    ui.fill(0, 0, kW, 2, col::accent);
     bool pve = st.mode == "pve";
     const char *mode = pve ? "PVE" : "PVP";
     std::string who = !profile.empty() ? profile.nickname : st.account;
@@ -2483,7 +2511,7 @@ void App::drawHeader() {
     for (int i = 0; i < TAB_COUNT; i++)
         textW += ui.measure(i == TAB_PROFILE ? who : kTabNames[i], FS_SMALL) + 2;
     textW += ui.measure(mode, FS_SMALL) + 22;
-    int pad = std::clamp((1280 - x - 60 - textW) / TAB_COUNT, 14, 28);
+    int pad = std::clamp((kW - x - 60 - textW) / TAB_COUNT, 14, 28);
     if (ui.measure(who, FS_SMALL) > 200)
         who = who.substr(0, 16) + "...";
     for (int i = 0; i < TAB_COUNT; i++) {
@@ -2503,21 +2531,22 @@ void App::drawHeader() {
     }
     ui.hint(x + 10, 10, "R", "");
     onTap(x, 0, ui.hintsWidth("R", "") + 30, 46, [this](int) { press(HidNpadButton_R); });
-    ui.fill(0, 46, 1280, 1, col::line);
+    ui.fill(0, 46, kW, 1, col::line);
 }
 
 void App::drawFooter(const std::vector<std::pair<std::string, std::string>> &hints) {
-    ui.fill(0, 676, 1280, 44, col::panel);
-    ui.fill(0, 676, 1280, 1, col::line);
+    const int fy = kH - 44;
+    ui.fill(0, fy, kW, 44, col::panel);
+    ui.fill(0, fy, kW, 1, col::line);
     bool fresh = armTicksToNs(armGetSystemTick() - statusTick) < 8000000000ULL;
     int w = 0;
     for (const auto &h : hints)
         w += ui.hintsWidth(h.first, h.second) + 22;
     if (!status.empty() && fresh)
-        ui.text(24, 686, status, FS_SMALL, statusColor, 1220 - w - 24);
-    int x = 1256 - w + 22;
+        ui.text(24, fy + 10, status, FS_SMALL, statusColor, kW - 60 - w - 24);
+    int x = kW - 24 - w + 22;
     for (const auto &h : hints) {
-        int hw = ui.hint(x, 685, h.first, h.second);
+        int hw = ui.hint(x, fy + 9, h.first, h.second);
         // Every hint is also a button; a pair like "ZL/ZR" splits into its two halves.
         static const std::map<std::string, std::pair<u64, u64>> kButtons = {
             {"A", {HidNpadButton_A, 0}},        {"B", {HidNpadButton_B, 0}},
@@ -2530,15 +2559,16 @@ void App::drawFooter(const std::vector<std::pair<std::string, std::string>> &hin
         };
         auto it = kButtons.find(h.first);
         if (h.first == "A/X") {
-            onTap(x - 8, 678, hw / 2 + 8, 42, [this](int) { zoomMap(1.5f, 640, 363); });
-            onTap(x + hw / 2, 678, hw - hw / 2 + 8, 42, [this](int) { zoomMap(1 / 1.5f, 640, 363); });
+            float cx = kW / 2, cy = (kMapTop + kMapBottom) / 2;
+            onTap(x - 8, fy + 2, hw / 2 + 8, 42, [this, cx, cy](int) { zoomMap(1.5f, cx, cy); });
+            onTap(x + hw / 2, fy + 2, hw - hw / 2 + 8, 42, [this, cx, cy](int) { zoomMap(1 / 1.5f, cx, cy); });
         } else if (it != kButtons.end() && it->second.second) {
             u64 a = it->second.first, b = it->second.second;
-            onTap(x - 8, 678, hw / 2 + 8, 42, [this, a](int) { press(a); });
-            onTap(x + hw / 2, 678, hw - hw / 2 + 8, 42, [this, b](int) { press(b); });
+            onTap(x - 8, fy + 2, hw / 2 + 8, 42, [this, a](int) { press(a); });
+            onTap(x + hw / 2, fy + 2, hw - hw / 2 + 8, 42, [this, b](int) { press(b); });
         } else if (it != kButtons.end()) {
             u64 a = it->second.first;
-            onTap(x - 8, 678, hw + 16, 42, [this, a](int) { press(a); });
+            onTap(x - 8, fy + 2, hw + 16, 42, [this, a](int) { press(a); });
         }
         x += hw + 22;
     }
@@ -2546,7 +2576,7 @@ void App::drawFooter(const std::vector<std::pair<std::string, std::string>> &hin
 
 void App::drawEmpty(const std::string &title, const std::string &sub) {
     ui.text(40, kTop + 20, title, FS_BODY, col::text);
-    ui.text(40, kTop + 60, sub, FS_SMALL, col::dim, 1200);
+    ui.text(40, kTop + 60, sub, FS_SMALL, col::dim, kW - 80);
 }
 
 void App::drawStations() {
@@ -2593,7 +2623,7 @@ void App::drawStations() {
     int lvl = shownLevel(st, s, viewLevel);
     const Level *L = levelOf(s, lvl);
     int px = 468;
-    int pw = 1280 - px - 16;
+    int pw = kW - px - 16;
     ui.fill(px, kTop, pw, kBottom - kTop, col::panel);
     if (!L) {
         ui.text(px + 20, kTop + 16, s.name + " has no levels", FS_BODY, col::dim);
@@ -2681,7 +2711,7 @@ void App::drawItems() {
     ui.text(28, kTop - 4, std::to_string(needed.size()) + " items still needed", FS_BODY, col::text);
     ui.text(320, kTop, std::to_string(fir) + " must be found in raid", FS_SMALL, col::warn);
     if (firOnly)
-        drawBadge(1150, kTop - 2, "FIR only", col::warn);
+        drawBadge(kW - 130, kTop - 2, "FIR only", col::warn);
     if (needed.empty()) {
         drawEmpty("", data.empty() ? "No hideout data loaded." : "Nothing left to collect. Hideout maxed!");
         drawFooter({{"Y", firOnly ? "Show all" : "FIR only"}});
@@ -2692,8 +2722,8 @@ void App::drawItems() {
         const NeededItem &n = needed[idx];
         int y = top + i * rowH;
         bool on = idx == itemList.sel;
-        onTap(16, y, 1240, rowH - 6, [this, idx](int n) { listTap(itemList, idx, n, 0); });
-        ui.fill(16, y, 1240, rowH - 6, on ? col::panelHi : col::panel);
+        onTap(16, y, kW - 40, rowH - 6, [this, idx](int n) { listTap(itemList, idx, n, 0); });
+        ui.fill(16, y, kW - 40, rowH - 6, on ? col::panelHi : col::panel);
         if (on)
             ui.fill(16, y, 4, rowH - 6, col::accent);
         ui.icon(data.icon(n.itemId), 28, y + 3, 44);
@@ -2704,9 +2734,9 @@ void App::drawItems() {
         std::string used;
         for (size_t k = 0; k < n.usedBy.size(); k++)
             used += (k ? ", " : "") + n.usedBy[k];
-        ui.text(820, y + 14, used, FS_SMALL, col::dim, 420);
+        ui.text(820, y + 14, used, FS_SMALL, col::dim, kW - 860);
     }
-    drawScrollbar(1262, top, visible * rowH, needed.size(), visible, itemList.scroll);
+    drawScrollbar(kW - 18, top, visible * rowH, needed.size(), visible, itemList.scroll);
     drawFooter({{"Y", firOnly ? "Show all" : "FIR only"}, {"</>", "Page"}});
 }
 
@@ -2715,7 +2745,7 @@ void App::drawCrafts() {
     std::string filter = craftFilter == 0 ? "Crafts at your built stations" : data.stations[craftFilter - 1].name;
     int fw = ui.text(28, kTop - 4, "<  " + filter + "  >", FS_BODY, col::accent);
     filterTaps(20, kTop - 8, fw + 16, 36);
-    ui.textRight(1252, kTop, std::to_string(list.size()) + " recipes", FS_SMALL, col::dim);
+    ui.textRight(kW - 28, kTop, std::to_string(list.size()) + " recipes", FS_SMALL, col::dim);
     int top = kTop + 36;
     int rowH = 72;
     int visible = (kBottom - top) / rowH;
@@ -2731,8 +2761,8 @@ void App::drawCrafts() {
         const Craft &c = *list[idx];
         int y = top + i * rowH;
         bool on = idx == craftList.sel;
-        onTap(16, y, 1240, rowH - 6, [this, idx](int n) { listTap(craftList, idx, n); });
-        ui.fill(16, y, 1240, rowH - 6, on ? col::panelHi : col::panel);
+        onTap(16, y, kW - 40, rowH - 6, [this, idx](int n) { listTap(craftList, idx, n); });
+        ui.fill(16, y, kW - 40, rowH - 6, on ? col::panelHi : col::panel);
         if (on)
             ui.fill(16, y, 4, rowH - 6, col::accent);
         const Station *s = data.station(c.stationId);
@@ -2743,7 +2773,7 @@ void App::drawCrafts() {
         int x = 100 + ui.text(100, y + 38, where, FS_SMALL, locked ? col::bad : col::dim) + 18;
         // Inputs as small icons with counts.
         for (const auto &r : c.req) {
-            if (x > 980)
+            if (x > kW - 300)
                 break;
             ui.icon(data.icon(r.itemId), x, y + 34, 28);
             x += 32;
@@ -2753,15 +2783,15 @@ void App::drawCrafts() {
         Timer *t = timerFor(c.id);
         if (t) {
             int64_t left = t->endTime - now;
-            ui.textRight(1240, y + 6, left <= 0 ? "READY" : formatDuration(left), FS_BODY,
+            ui.textRight(kW - 40, y + 6, left <= 0 ? "READY" : formatDuration(left), FS_BODY,
                          left <= 0 ? col::good : col::accent);
             float frac = c.duration > 0 ? 1.f - float(left) / c.duration : 1.f;
-            ui.progress(1100, y + 44, 140, 6, frac, left <= 0 ? col::good : col::accent);
+            ui.progress(kW - 180, y + 44, 140, 6, frac, left <= 0 ? col::good : col::accent);
         } else {
-            ui.textRight(1240, y + 8, formatDuration(c.duration), FS_SMALL, col::dim);
+            ui.textRight(kW - 40, y + 8, formatDuration(c.duration), FS_SMALL, col::dim);
         }
     }
-    drawScrollbar(1262, top, visible * rowH, list.size(), visible, craftList.scroll);
+    drawScrollbar(kW - 18, top, visible * rowH, list.size(), visible, craftList.scroll);
     drawFooter({{"A", "Start/collect"}, {"X", "Cancel"}, {"</>", "Station"}});
 }
 
@@ -2780,8 +2810,8 @@ void App::drawTimers() {
         const Craft *c = craftById(t.craftId);
         int y = kTop + i * rowH;
         bool on = idx == timerList.sel;
-        onTap(16, y, 1240, rowH - 6, [this, idx](int n) { listTap(timerList, idx, n); });
-        ui.fill(16, y, 1240, rowH - 6, on ? col::panelHi : col::panel);
+        onTap(16, y, kW - 40, rowH - 6, [this, idx](int n) { listTap(timerList, idx, n); });
+        ui.fill(16, y, kW - 40, rowH - 6, on ? col::panelHi : col::panel);
         if (on)
             ui.fill(16, y, 4, rowH - 6, col::accent);
         std::string name = c ? craftTitle(*c) : t.craftId;
@@ -2791,10 +2821,10 @@ void App::drawTimers() {
         if (s)
             ui.text(100, y + 38, s->name, FS_SMALL, col::dim, 300);
         int64_t left = t.endTime - now;
-        ui.textRight(1240, y + 8, left <= 0 ? "READY" : formatDuration(left), FS_TITLE,
+        ui.textRight(kW - 40, y + 8, left <= 0 ? "READY" : formatDuration(left), FS_TITLE,
                      left <= 0 ? col::good : col::accent);
         if (c && c->duration > 0)
-            ui.progress(420, y + 54, 820, 6, 1.f - float(left) / c->duration, left <= 0 ? col::good : col::accent);
+            ui.progress(420, y + 54, kW - 460, 6, 1.f - float(left) / c->duration, left <= 0 ? col::good : col::accent);
     }
     drawFooter({{"A", "Collect"}, {"X", "Cancel"}});
 }
@@ -2809,7 +2839,7 @@ void App::drawTiles(const std::vector<SDL_Texture *> &tiles, int imgW, int imgH,
         int pw = std::min(kMapTile, imgW - px), ph = std::min(kMapTile, imgH - py);
         float x0 = std::round(x + px * sx), x1 = std::round(x + (px + pw) * sx);
         float y0 = std::round(y + py * sy), y1 = std::round(y + (py + ph) * sy);
-        if (x1 < 0 || x0 > 1280 || y1 < top || y0 > bottom)
+        if (x1 < 0 || x0 > kW || y1 < top || y0 > bottom)
             continue;
         SDL_FRect dst{x0, y0, x1 - x0, y1 - y0};
         ui.image(tiles[i], nullptr, &dst);
@@ -2828,7 +2858,7 @@ void App::drawLevels(const std::string &image, const std::vector<MapLevel> &leve
     std::string stem = image.substr(0, image.size() - 4) + "/" + std::to_string(k) + "/";
     int cols = (lv.w + kMapChunk - 1) / kMapChunk, rows = (lv.h + kMapChunk - 1) / kMapChunk;
     float sx = w / lv.w, sy = h / lv.h;
-    int cx0 = std::max(0, int((0 - x) / sx) / kMapChunk), cx1 = std::min(cols - 1, int((1280 - x) / sx) / kMapChunk);
+    int cx0 = std::max(0, int((0 - x) / sx) / kMapChunk), cx1 = std::min(cols - 1, int((kW - x) / sx) / kMapChunk);
     int cy0 = std::max(0, int((top - y) / sy) / kMapChunk), cy1 = std::min(rows - 1, int((bottom - y) / sy) / kMapChunk);
     for (int cy = cy0; cy <= cy1; cy++)
         for (int cx = cx0; cx <= cx1; cx++) {
@@ -2849,13 +2879,13 @@ void App::drawLevels(const std::string &image, const std::vector<MapLevel> &leve
 
 void App::drawMapPicker() {
     int n = maps.size();
-    const int gap = 12, cw = (1248 - gap * (kPickCols - 1)) / kPickCols, thumbH = 96, ch = 140;
-    int rows = (n + kPickCols - 1) / kPickCols;
+    const int gap = 12, cw = (kW - 32 - gap * (pickCols() - 1)) / pickCols(), thumbH = 96, ch = 140;
+    int rows = (n + pickCols() - 1) / pickCols();
     int visible = std::max(1, (kBottom - kTop + 8 + gap) / (ch + gap));
-    int firstRow = std::clamp(pickSel / kPickCols - visible + 1, 0, std::max(0, rows - visible));
-    for (int i = firstRow * kPickCols; i < n && i < (firstRow + visible) * kPickCols; i++) {
+    int firstRow = std::clamp(pickSel / pickCols() - visible + 1, 0, std::max(0, rows - visible));
+    for (int i = firstRow * pickCols(); i < n && i < (firstRow + visible) * pickCols(); i++) {
         const MapInfo &m = maps[i];
-        int col = i % kPickCols, row = i / kPickCols - firstRow;
+        int col = i % pickCols(), row = i / pickCols() - firstRow;
         int x = 16 + col * (cw + gap), y = kTop - 8 + row * (ch + gap);
         bool on = i == pickSel;
         onTap(x, y, cw, ch, [this, i](int) {
@@ -2884,7 +2914,7 @@ void App::drawMapPicker() {
         if (!sub.empty())
             ui.textRight(x + cw - 12, y + thumbH + 8, sub, FS_SMALL, col::faint);
     }
-    drawScrollbar(1268, kTop - 8, kBottom - kTop + 8, rows, visible, firstRow);
+    drawScrollbar(kW - 12, kTop - 8, kBottom - kTop + 8, rows, visible, firstRow);
     drawFooter({{"A", "Open"}, {"+", "Quit"}});
 }
 
@@ -2925,7 +2955,7 @@ void App::drawMaps() {
     int top, bottom;
     mapViewport(top, bottom);
     MapInk ink;
-    float viewW = 1280, viewH = bottom - top;
+    float viewW = kW, viewH = bottom - top;
     float fit = std::min(viewW / m->w, viewH / m->h);
     float scale = fit * mapZoom;
     float dw = m->w * scale, dh = m->h * scale;
@@ -2934,9 +2964,9 @@ void App::drawMaps() {
     float oy = dh <= viewH ? (viewH - dh) / 2 : std::clamp(viewH / 2 - mapV * dh, viewH - dh, 0.f);
     oy += top;
 
-    SDL_Rect clipR{0, top, 1280, bottom - top};
+    SDL_Rect clipR{0, top, kW, bottom - top};
     ui.clip(&clipR);
-    ui.fill(0, top, 1280, bottom - top, col::bg);
+    ui.fill(0, top, kW, bottom - top, col::bg);
     mapFrame++;
     chunkLoads = 0;
     mapFrameStart = SDL_GetTicks();
@@ -3013,7 +3043,7 @@ void App::drawMaps() {
         for (const auto &f : m->floors)
             w = std::max(w, ui.measure(f.name, FS_SMALL));
         w += 28;
-        int x = 1264 - w, y = top + 12;
+        int x = kW - 16 - w, y = top + 12;
         ui.fill(x, y, w, n * rowH + 8, SDL_Color{14, 15, 13, 215});
         for (int i = n - 1; i >= 0; i--) {
             int ry = y + 4 + (n - 1 - i) * rowH;
@@ -3120,9 +3150,9 @@ void App::drawDbHeader() {
         filterTaps(x - 8, kTop - 8, fw + 16, 36);
     }
     if (!dbSearch.empty()) {
-        int bw = drawBadge(1256 - ui.measure("Search: " + dbSearch, FS_SMALL) - 14, kTop - 2, "Search: " + dbSearch,
+        int bw = drawBadge(kW - 24 - ui.measure("Search: " + dbSearch, FS_SMALL) - 14, kTop - 2, "Search: " + dbSearch,
                            col::info);
-        onTap(1256 - bw, kTop - 6, bw, 32, [this](int) { press(HidNpadButton_X); });
+        onTap(kW - 24 - bw, kTop - 6, bw, 32, [this](int) { press(HidNpadButton_X); });
     }
 }
 
@@ -3138,15 +3168,15 @@ void App::drawQuestList() {
         int y = top + i * rowH;
         bool on = idx == dbList.sel;
         bool done = st.tasksDone.count(q.id) > 0;
-        onTap(16, y, 1240, rowH - 6, [this, idx](int n) { listTap(dbList, idx, n); });
-        ui.fill(16, y, 1240, rowH - 6, on ? col::panelHi : col::panel);
+        onTap(16, y, kW - 40, rowH - 6, [this, idx](int n) { listTap(dbList, idx, n); });
+        ui.fill(16, y, kW - 40, rowH - 6, on ? col::panelHi : col::panel);
         if (on)
             ui.fill(16, y, 4, rowH - 6, col::accent);
         ui.text(32, y + 2, q.name, FS_BODY, done ? col::dim : col::text, 640);
         std::string sub = q.trader + (q.level > 1 ? "   Level " + std::to_string(q.level) : "") +
                           (q.map.empty() ? "" : "   " + q.map);
         ui.text(32, y + 28, sub, FS_SMALL, col::dim, 640);
-        int bx = 1240;
+        int bx = kW - 40;
         auto badge = [&](const std::string &t, SDL_Color c) {
             int w = ui.measure(t, FS_SMALL) + 14;
             bx -= w + 8;
@@ -3164,7 +3194,7 @@ void App::drawQuestList() {
         if (pinned)
             badge("Map", col::warn);
     }
-    drawScrollbar(1262, top, visible * rowH, dbRows.size(), visible, dbList.scroll);
+    drawScrollbar(kW - 18, top, visible * rowH, dbRows.size(), visible, dbList.scroll);
     drawFooter({{"A", "Open"}, {"Y", "Search"}, {"</>", "Trader"}, {"ZL/ZR", "Section"}});
 }
 
@@ -3297,9 +3327,11 @@ void App::drawAmmo() {
     }
     drawScrollbar(lx + lw + 2, top, visible * rowH, ammoRows.size(), visible, ammoList.scroll);
 
-    drawAmmoChart(652, kTop - 8, 612, 400);
+    // The chart takes what the layout adds; the detail card below keeps its height.
+    const int chartH = 400 + kH - 720;
+    drawAmmoChart(652, kTop - 8, kW - 668, chartH);
     if (!ammoRows.empty())
-        drawAmmoDetail(db.ammo[ammoRows[ammoList.sel]], 652, kTop + 400, 612);
+        drawAmmoDetail(db.ammo[ammoRows[ammoList.sel]], 652, kTop + chartH, kW - 668);
     bool picked = !ammoRows.empty() &&
                   std::find(ammoPicked.begin(), ammoPicked.end(), ammoRows[ammoList.sel]) != ammoPicked.end();
     std::vector<std::pair<std::string, std::string>> hints = {{"A", picked ? "Unpin" : "Pin to chart"},
@@ -3496,10 +3528,10 @@ void App::drawKeys() {
     drawScrollbar(620, top, visible * rowH, dbRows.size(), visible, dbList.scroll);
     if (!dbRows.empty()) {
         const KeyInfo &k = db.keys[dbRows[dbList.sel]];
-        drawItemDetail(k.item, 640, top, 624);
+        drawItemDetail(k.item, 640, top, kW - 656);
         int y = kBottom - 30 - 26 * std::min<int>(k.quests.size(), 3);
         if (k.uses)
-            ui.textRight(1248, top + 124, std::to_string(k.uses) + " uses", FS_SMALL, col::dim);
+            ui.textRight(kW - 32, top + 124, std::to_string(k.uses) + " uses", FS_SMALL, col::dim);
         (void)y;
     }
     drawFooter({{"A", "Show lock"}, {"Y", "Search"}, {"</>", "Page"}, {"ZL/ZR", "Section"}});
@@ -3528,12 +3560,18 @@ void App::drawDbItems() {
     }
     drawScrollbar(620, top, visible * rowH, dbItemRows.size(), visible, dbList.scroll);
     if (!dbItemRows.empty())
-        drawItemDetail(dbItemRows[dbList.sel], 640, top, 624);
+        drawItemDetail(dbItemRows[dbList.sel], 640, top, kW - 656);
     drawFooter({{"Y", "Search"}, {"X", "Clear"}, {"</>", "Page"}, {"ZL/ZR", "Section"}});
 }
 
 void App::drawQuest() {
     const Quest &q = db.quests[openQuest];
+    if (questLayoutW != kW) {
+        // The window or zoom changed: rewrap at the new width, near the same reading position.
+        float frac = questText.empty() ? 0 : (float)textScroll / questText.size();
+        layoutQuest();
+        textScroll = (int)(frac * questText.size());
+    }
     bool done = st.tasksDone.count(q.id) > 0;
     // Title strip.
     ui.text(24, kTop - 10, q.name, FS_TITLE, col::text, 760);
@@ -3541,7 +3579,7 @@ void App::drawQuest() {
                       (q.map.empty() ? "" : "   " + q.map) +
                       (q.faction.empty() ? "" : "   " + q.faction + " only");
     ui.text(24, kTop + 26, sub, FS_SMALL, col::dim, 760);
-    int bx = 1256;
+    int bx = kW - 24;
     auto badge = [&](const std::string &t, SDL_Color c) {
         int w = ui.measure(t, FS_SMALL) + 14;
         bx -= w + 8;
@@ -3558,7 +3596,7 @@ void App::drawQuest() {
     int y = top;
     // Left (or full width): wiki guide.
     if (questView != 2) {
-        int gw = questView == 1 ? 1248 : 608;
+        int gw = questView == 1 ? kW - 32 : kW / 2 - 32;
         ui.fill(16, top, gw, kBottom - top, col::panel);
         int lines = (kBottom - top - 50) / 26;
         y = top + 12;
@@ -3598,7 +3636,7 @@ void App::drawQuest() {
         drawFooter({{"B", "Back"}, {"Y", kViewNames[2]}, {"^/v", "Scroll"}, {"ZL/ZR", "Page"}});
         return;
     }
-    int rx = questView == 2 ? 16 : 640, rw = questView == 2 ? 1248 : 624;
+    int rx = questView == 2 ? 16 : kW / 2, rw = questView == 2 ? kW - 32 : kW / 2 - 16;
     ui.fill(rx, top, rw, kBottom - top, col::panel);
     SDL_Rect clipR{rx, top, rw, kBottom - top};
     // Keep the selected row in view.
@@ -3771,7 +3809,7 @@ void App::drawProfile() {
         };
         int y = kTop + 64;
         for (const char *l : lines) {
-            ui.text(40, y, l, FS_BODY, *l >= '1' && *l <= '3' ? col::text : col::dim, 1200);
+            ui.text(40, y, l, FS_BODY, *l >= '1' && *l <= '3' ? col::text : col::dim, kW - 80);
             y += 40;
         }
         drawFooter({{"A", "Enter profile ID"}});
@@ -3783,7 +3821,7 @@ void App::drawProfile() {
         return;
     }
     // Identity card.
-    ui.fill(16, kTop, 1248, 96, col::panel);
+    ui.fill(16, kTop, kW - 32, 96, col::panel);
     ui.fill(16, kTop, 4, 96, col::accent);
     int level = data.playerLevel(profile.exp);
     std::string lv = std::to_string(level);
@@ -3804,32 +3842,34 @@ void App::drawProfile() {
     if (level < (int)data.levelExp.size())
         total += data.levelExp[level];
     if (total > prev) {
-        ui.progress(860, kTop + 60, 380, 8, float(profile.exp - prev) / (total - prev), col::accent);
-        ui.textRight(1240, kTop + 26, groupDigits(total - profile.exp) + " exp to level " + std::to_string(level + 1),
+        ui.progress(kW - 420, kTop + 60, 380, 8, float(profile.exp - prev) / (total - prev), col::accent);
+        ui.textRight(kW - 40, kTop + 26, groupDigits(total - profile.exp) + " exp to level " + std::to_string(level + 1),
                      FS_SMALL, col::dim);
     }
 
+    // PMC and Scav columns share what the skills column leaves.
+    const int sw = (kW - 480) / 2;
     auto statCol = [&](int x, const char *title, const std::vector<ProfileStat> &stats) {
         int y = kTop + 112;
-        ui.fill(x, y, 400, kBottom - y, col::panel);
+        ui.fill(x, y, sw, kBottom - y, col::panel);
         ui.text(x + 16, y + 10, title, FS_BODY, col::accent);
         y += 50;
         for (const auto &s : stats) {
             ui.text(x + 16, y, s.label, FS_SMALL, col::dim);
-            ui.textRight(x + 384, y, s.value, FS_SMALL, col::text);
+            ui.textRight(x + sw - 16, y, s.value, FS_SMALL, col::text);
             y += 32;
             if (y > kBottom - 30)
                 break;
         }
     };
     statCol(16, "PMC", profile.pmc);
-    statCol(432, "Scav", profile.scav);
+    statCol(32 + sw, "Scav", profile.scav);
 
-    int x = 848, y = kTop + 112;
+    int x = kW - 432, y = kTop + 112;
     ui.fill(x, y, 416, kBottom - y, col::panel);
     ui.text(x + 16, y + 10, "Skills", FS_BODY, col::accent);
     y += 50;
-    int rows = 12;
+    int rows = 12 + (kH - 720) / 30;
     skillScroll = std::clamp(skillScroll, 0, std::max(0, (int)profile.skills.size() - rows));
     for (int i = 0; i < rows && skillScroll + i < (int)profile.skills.size(); i++) {
         const ProfileSkill &s = profile.skills[skillScroll + i];
@@ -3864,28 +3904,46 @@ void App::drawSettings() {
         {"tarkov.dev profile ID", st.profileId.empty() ? "not set" : st.profileId},
         {"Game mode", st.mode == "pve" ? "PVE" : "PVP"},
         {"Theme", themes()[themeIndex(st.theme)].name},
+        {"Interface zoom", std::to_string(nxZoom()) + "%   " + nxButtonLabel("</>")},
         {"Download latest data, icons and maps", data.empty() ? "no data" : data.generated},
         {"Download all wiki pictures", "for offline guides"},
         {confirmReset ? "Clear local progress? Press A again" : "Clear local progress and timers", ""},
     };
-    settingsList.clamp(SET_COUNT, SET_COUNT);
-    for (int i = 0; i < SET_COUNT; i++) {
-        int y = kTop + i * 52;
-        bool on = i == settingsList.sel;
-        onTap(16, y, 820, 46, [this, i](int) {
-            if (settingsList.sel != i)
+    auto shown = settingRows();
+    int n = shown.size();
+    // Ten rows still leave room for the wiki pictures note above the footer.
+    const int pitch = n > 9 ? 49 : 52, rowH = pitch - 6, rowW = kW - 460;
+    settingsList.clamp(n, n);
+    for (int k = 0; k < n; k++) {
+        int i = shown[k];
+        int y = kTop + k * pitch;
+        bool on = k == settingsList.sel;
+        onTap(16, y, rowW, rowH, [this, k, i](int) {
+            if (settingsList.sel != k)
                 confirmReset = false;
-            settingsList.sel = i;
-            press(HidNpadButton_A);
+            settingsList.sel = k;
+            if (i != SET_ZOOM)
+                press(HidNpadButton_A);
         });
-        ui.fill(16, y, 820, 46, on ? col::panelHi : col::panel);
+        if (i == SET_ZOOM) {
+            // The value is a "<  >" control: its halves zoom out and in.
+            onTap(rowW - 184, y, 100, rowH, [this, k](int) {
+                settingsList.sel = k;
+                nxSetZoom(nxZoom() - 10);
+            });
+            onTap(rowW - 84, y, 100, rowH, [this, k](int) {
+                settingsList.sel = k;
+                nxSetZoom(nxZoom() + 10);
+            });
+        }
+        ui.fill(16, y, rowW, rowH, on ? col::panelHi : col::panel);
         if (on)
-            ui.fill(16, y, 4, 46, col::accent);
-        ui.text(36, y + 10, rows[i].label, FS_BODY, i == SET_RESET && confirmReset ? col::warn : col::text, 500);
-        ui.textRight(816, y + 13, rows[i].value, FS_SMALL, col::dim);
+            ui.fill(16, y, 4, rowH, col::accent);
+        ui.text(36, y + rowH / 2 - 13, rows[i].label, FS_BODY, i == SET_RESET && confirmReset ? col::warn : col::text, 500);
+        ui.textRight(rowW - 4, y + rowH / 2 - 10, rows[i].value, FS_SMALL, i == SET_ZOOM ? col::accent : col::dim);
     }
-    if (settingsList.sel == SET_PICTURES) {
-        int ny = kTop + SET_COUNT * 52 + 8;
+    if (!shown.empty() && shown[settingsList.sel] == SET_PICTURES) {
+        int ny = kTop + n * pitch + 8;
         const char *warn[] = {
             "Heads up: this makes about a thousand downloads in a row.",
             "They come from this app's GitHub copy of the pictures, never",
@@ -3897,7 +3955,7 @@ void App::drawSettings() {
             ny += 24;
         }
     }
-    int x = 860, y = kTop;
+    int x = kW - 420, y = kTop;
     ui.fill(x, y, 404, kBottom - y, col::panel);
     ui.text(x + 16, y + 10, "About", FS_BODY, col::accent);
     y += 50;
@@ -3934,6 +3992,10 @@ void App::draw() {
         rebuildNeeded();
     hits.clear();
     ui.clear();
+    kW = ui.width();
+    kH = ui.height();
+    kBottom = kH - 56;
+    kMapBottom = kH - 44;
     if (!(tab == TAB_MAPS && mapFull && !maps.empty()))
         drawHeader();
     switch (tab) {

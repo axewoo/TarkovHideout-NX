@@ -59,7 +59,7 @@ On PC, progress, settings and downloads are saved in `%APPDATA%\TarkovHideout` (
 
 ## PC second screen
 
-The PC version is the same app with the same tabs, data and TarkovTracker sync, in a window you can put on a second monitor while you play. It scales to any size, keeps text and maps sharp at high resolutions, and reopens where you left it.
+The PC version is the same app with the same tabs, data and TarkovTracker sync, in a window you can put on a second monitor while you play. It fills a window of any size or shape, keeps text and maps sharp at high resolutions, and reopens where you left it. **Interface zoom** (Settings, Ctrl + / Ctrl -, or Ctrl+wheel) makes everything smaller, down to 50%, so a big window shows more rows, a wider ammo chart and more of the map. On Linux it runs as a native Wayland window when your desktop uses Wayland, so display scaling doesn't blur it.
 
 <table>
 <tr>
@@ -76,7 +76,7 @@ The PC version is the same app with the same tabs, data and TarkovTracker sync, 
 
   | Key | Action |
   | --- | --- |
-  | 1 to 9 | Jump to a tab |
+  | 1 to 9, 0 | Jump to a tab |
   | Q / E, Tab | Previous / next tab |
   | Arrows, Enter, Esc | Move, select, back |
   | PgUp / PgDn | Same as ZL / ZR (floors, sections, levels) |
@@ -85,6 +85,7 @@ The PC version is the same app with the same tabs, data and TarkovTracker sync, 
   | F | Fullscreen map |
   | R | Game render / vector plan |
   | F11 | Fullscreen window |
+  | Ctrl + / Ctrl - / Ctrl 0 | Interface zoom: smaller, larger, reset (Ctrl+wheel too) |
   | Ctrl+Q | Quit |
 
 - **Controller.** Any controller works like the Switch pad, and the hints switch back to Switch buttons while you use it.

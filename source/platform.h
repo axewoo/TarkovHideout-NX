@@ -17,6 +17,12 @@ inline bool nxPointer(int &, int &) { return false; }
 inline bool nxTouchCancelled() { return false; }
 inline const std::string &nxButtonLabel(const std::string &b) { return b; }
 inline float nxUiScale() { return 1; }
+inline void nxLayoutSize(int &w, int &h) {
+    w = 1280;
+    h = 720;
+}
+inline int nxZoom() { return 100; }
+inline void nxSetZoom(int) {}
 inline void nxWindowCreated(struct SDL_Window *, struct SDL_Renderer *) {}
 inline bool nxDesktop() { return false; }
 #else

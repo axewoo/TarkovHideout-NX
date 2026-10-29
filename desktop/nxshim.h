@@ -131,5 +131,9 @@ bool nxTouchCancelled();        // the touch that just ended turned into a pinch
 // Keyboard name for a Switch button label when the keyboard was used last.
 const std::string &nxButtonLabel(const std::string &button);
 float nxUiScale();              // window pixels per layout pixel
+// Layout size: 1280 x 720 at least, larger to fill a window of another shape or when zoomed out.
+void nxLayoutSize(int &w, int &h);
+int nxZoom();                   // interface size in percent, 100 = the layout fills the window
+void nxSetZoom(int percent);
 void nxWindowCreated(SDL_Window *window, SDL_Renderer *renderer);
 inline bool nxDesktop() { return true; }
