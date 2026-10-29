@@ -1,4 +1,4 @@
-#include <switch.h>
+#include "platform.h"
 
 #include <sys/stat.h>
 #include <dirent.h>
@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <ctime>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <set>
 #include <sstream>
@@ -20,7 +21,9 @@
 #include "net.h"
 #include "ui.h"
 
+#ifndef APP_DIR
 #define APP_DIR "sdmc:/switch/TarkovHideout"
+#endif
 #define STATE_PATH APP_DIR "/state.json"
 #define DATA_URL "https://raw.githubusercontent.com/axewoo/TarkovHideout-NX/data/"
 #define TRACKER_API "https://api.tarkovtracker.org"
@@ -72,6 +75,12 @@ static bool fileExists(const std::string &path) {
     return stat(path.c_str(), &sb) == 0;
 }
 
+// stat rather than dirent's d_type, which Windows does not have.
+static bool isDir(const std::string &path) {
+    struct stat sb;
+    return stat(path.c_str(), &sb) == 0 && S_ISDIR(sb.st_mode);
+}
+
 // Creates every missing folder above a file path.
 static void makeParents(const std::string &path) {
     for (size_t i = path.find('/', 1); i != std::string::npos; i = path.find('/', i + 1))
@@ -103,7 +112,8 @@ static std::string dateString(int64_t seconds) {
     return buf;
 }
 
-// Directional buttons with hold-to-repeat, plus sticks and touch.
+// Directional buttons with hold-to-repeat, plus sticks and touch. On the desktop the mouse is the
+// touch screen, so a tap is a click.
 struct Input {
     PadState pad;
     u64 down = 0, held = 0;
@@ -111,6 +121,12 @@ struct Input {
     float lx = 0, ly = 0, rx = 0, ry = 0;  // -1..1, y up
     bool touching = false;
     int touchX = 0, touchY = 0, touchDX = 0, touchDY = 0;
+    // A touch that ends close to where it started is a tap; two quick taps in one spot count 2.
+    int tapStartX = 0, tapStartY = 0, tapMoved = 0;
+    bool tapped = false;
+    int tapX = 0, tapY = 0, tapCount = 0;
+    u64 lastTap = 0;
+    float wheel = 0;  // desktop mouse wheel notches, up is positive
 
     void init() {
         padConfigureInput(1, HidNpadStyleSet_NpadStandard);
@@ -152,15 +168,29 @@ struct Input {
         bool was = touching;
         touching = hidGetTouchScreenStates(&ts, 1) && ts.count > 0;
         touchDX = touchDY = 0;
+        tapped = false;
         if (touching) {
             int x = ts.touches[0].x, y = ts.touches[0].y;
             if (was) {
                 touchDX = x - touchX;
                 touchDY = y - touchY;
+            } else {
+                tapStartX = x;
+                tapStartY = y;
+                tapMoved = 0;
             }
             touchX = x;
             touchY = y;
+            tapMoved = std::max(tapMoved, std::abs(x - tapStartX) + std::abs(y - tapStartY));
+        } else if (was && tapMoved < 12) {
+            bool again = now - lastTap < freq * 45 / 100 && std::abs(tapStartX - tapX) + std::abs(tapStartY - tapY) < 12;
+            tapCount = again ? tapCount + 1 : 1;
+            tapped = true;
+            tapX = tapStartX;
+            tapY = tapStartY;
+            lastTap = now;
         }
+        wheel = nxWheel();
     }
 
     bool pressed(u64 mask) const { return down & mask; }
@@ -419,6 +449,26 @@ private:
     std::string status;
     SDL_Color statusColor = col::dim;
     u64 statusTick = 0;
+
+    // Taps and clicks: areas drawn last frame that react, topmost last. The handler gets the
+    // tap count (2 for a double click).
+    struct Hit {
+        SDL_Rect r;
+        std::function<void(int)> fn;
+    };
+    std::vector<Hit> hits;
+    float wheelAcc = 0;
+    int wheelSteps = 0;   // pending Up/Down presses from the mouse wheel
+    float wheelGuide = 0; // wiki guide lines to scroll
+    void onTap(int x, int y, int w, int h, std::function<void(int)> fn) { hits.push_back({{x, y, w, h}, std::move(fn)}); }
+    // Acts as if the buttons were pressed this frame.
+    void press(u64 buttons) { in.down |= buttons; }
+    void setTab(int t);
+    void pointerInput();
+    bool wheelList();
+    void zoomMap(float factor, float ax, float ay);
+    void listTap(ListView &lv, int idx, int taps, u64 doubleTap = HidNpadButton_A);
+    void filterTaps(int x, int y, int w, int h);
 };
 
 bool App::init() {
@@ -494,7 +544,7 @@ void App::loadData() {
     std::string bestRoot;
     std::string err;
     bool bestIcons = false;
-    for (const std::string &root : {std::string(APP_DIR "/"), std::string("romfs:/")}) {
+    for (const std::string &root : {std::string(APP_DIR "/"), std::string(ROMFS_ROOT)}) {
         std::string text = readFile(root + name);
         if (text.empty())
             continue;
@@ -526,7 +576,7 @@ void App::loadMaps() {
     std::string err;
     maps.clear();
     mapsRoot.clear();
-    for (const std::string &root : {std::string(APP_DIR "/"), std::string("romfs:/")}) {
+    for (const std::string &root : {std::string(APP_DIR "/"), std::string(ROMFS_ROOT)}) {
         std::vector<MapInfo> m;
         if (parseMaps(readFile(root + name), m, err)) {
             maps = std::move(m);
@@ -574,7 +624,7 @@ bool App::downloadData(bool quiet) {
     std::vector<std::string> dirs = {"/maps/", "/maps/floors/", "/maps/thumbs/"};
     if (DIR *dir = opendir(APP_DIR "/maps/")) {
         while (struct dirent *e = readdir(dir))
-            if (e->d_name[0] != '.' && e->d_type == DT_DIR)
+            if (e->d_name[0] != '.' && isDir(std::string(APP_DIR "/maps/") + e->d_name))
                 dirs.push_back(std::string("/maps/") + e->d_name + "/");
         closedir(dir);
     }
@@ -582,7 +632,7 @@ bool App::downloadData(bool quiet) {
         std::string d = std::string(APP_DIR) + sub;
         if (DIR *dir = opendir(d.c_str())) {
             while (struct dirent *e = readdir(dir))
-                if (e->d_name[0] != '.' && e->d_type != DT_DIR)
+                if (e->d_name[0] != '.' && !isDir(d + e->d_name))
                     remove((d + e->d_name).c_str());
             closedir(dir);
         }
@@ -612,7 +662,7 @@ void App::downloadPictures() {
     }
     std::vector<std::string> todo;
     for (const std::string &p : paths)
-        if (!fileExists("romfs:/" + p) && !fileExists(std::string(APP_DIR "/") + p))
+        if (!fileExists(ROMFS_ROOT + p) && !fileExists(std::string(APP_DIR "/") + p))
             todo.push_back(p);
     if (todo.empty()) {
         setStatus(paths.empty() ? "No wiki pictures in the data yet" :
@@ -869,6 +919,7 @@ std::string App::craftTitle(const Craft &c) const {
 
 void App::input() {
     in.update();
+    pointerInput();
     if (in.pressed(HidNpadButton_Plus)) {
         running = false;
         return;
@@ -1127,8 +1178,8 @@ std::string App::mapFile(const MapInfo &m, const std::string &image, bool quiet)
     std::string sd = std::string(APP_DIR "/") + image;
     if (fileExists(sd))
         return sd;
-    if (fileExists("romfs:/" + image))
-        return "romfs:/" + image;
+    if (fileExists(ROMFS_ROOT + image))
+        return ROMFS_ROOT + image;
     if (quiet)
         return "";
     busy("Downloading " + m.name + " map...");
@@ -1169,7 +1220,8 @@ void App::openMap(int idx) {
     mapFloor = maps[idx].baseFloor;
 }
 
-static const int kMaxChunks = 32;
+// A desktop window can show more of a sharp level at once and has the memory for it.
+static const int kMaxChunks = nxDesktop() ? 160 : 32;
 
 // A sharp piece from the SD card or romfs, downloaded silently when neither has it.
 // Returns nullptr when it is not ready yet (try again next frame) or does not exist.
@@ -1182,7 +1234,7 @@ SDL_Texture *App::mapChunk(const std::string &path) {
     if (chunkMissing.count(path) || (chunkLoads > 0 && SDL_GetTicks() - mapFrameStart > 12))
         return nullptr;
     chunkLoads++;
-    std::string file = "romfs:/" + path;
+    std::string file = ROMFS_ROOT + path;
     if (!fileExists(file)) {
         file = std::string(APP_DIR "/") + path;
         if (!fileExists(file)) {
@@ -1336,6 +1388,30 @@ void App::inputMaps() {
     mapV = std::clamp(mapV, hv, 1 - hv);
 }
 
+// Zooms the open map by factor, keeping the map point under (ax, ay) where it is.
+void App::zoomMap(float factor, float ax, float ay) {
+    const MapInfo *m = currentMap();
+    if (!m)
+        return;
+    int top, bottom;
+    mapViewport(top, bottom);
+    float viewW = 1280, viewH = bottom - top;
+    float fit = std::min(viewW / m->w, viewH / m->h);
+    auto origin = [&](float zoom, float &ox, float &oy) {
+        float dw = m->w * fit * zoom, dh = m->h * fit * zoom;
+        ox = dw <= viewW ? (viewW - dw) / 2 : std::clamp(viewW / 2 - mapU * dw, viewW - dw, 0.f);
+        oy = top + (dh <= viewH ? (viewH - dh) / 2 : std::clamp(viewH / 2 - mapV * dh, viewH - dh, 0.f));
+    };
+    float ox, oy;
+    origin(mapZoom, ox, oy);
+    float u = (ax - ox) / (m->w * fit * mapZoom), v = (ay - oy) / (m->h * fit * mapZoom);
+    float zoom = std::clamp(mapZoom * factor, 1.f, 16.f);
+    float dw = m->w * fit * zoom, dh = m->h * fit * zoom;
+    mapU = (viewW / 2 - ax) / dw + u;
+    mapV = (top + viewH / 2 - ay) / dh + v;
+    mapZoom = zoom;
+}
+
 void App::inputProfile() {
     if (in.pressed(HidNpadButton_A) || in.pressed(HidNpadButton_X)) {
         if (st.profileId.empty() || in.pressed(HidNpadButton_X))
@@ -1401,6 +1477,109 @@ void App::inputSettings() {
     }
 }
 
+void App::setTab(int t) {
+    tab = Tab(t);
+    reqFocus = false;
+    confirmReset = false;
+}
+
+// Selects a list row on a tap; a double tap also presses the row's action button.
+void App::listTap(ListView &lv, int idx, int taps, u64 doubleTap) {
+    lv.sel = idx;
+    if (taps >= 2)
+        press(doubleTap);
+}
+
+// A "<  filter  >" label: the left half steps back, the right half forward.
+void App::filterTaps(int x, int y, int w, int h) {
+    onTap(x, y, w / 2, h, [this](int) { press(HidNpadButton_Left); });
+    onTap(x + w / 2, y, w - w / 2, h, [this](int) { press(HidNpadButton_Right); });
+}
+
+// Moves the selection of the list under the wheel without wrapping around. False when the tab
+// has no such list.
+bool App::wheelList() {
+    ListView *lv = nullptr;
+    int n = 0;
+    switch (tab) {
+    case TAB_STATIONS:
+        if (data.stations.empty())
+            break;
+        stationList.clampSel(data.stations.size());
+        if (reqFocus) {
+            const Station &s = data.stations[stationList.sel];
+            const Level *L = levelOf(s, shownLevel(st, s, viewLevel));
+            lv = &reqList;
+            n = L ? L->items.size() : 0;
+        } else {
+            int before = stationList.sel;
+            stationList.sel = std::clamp(before + wheelSteps, 0, (int)data.stations.size() - 1);
+            if (stationList.sel != before) {
+                viewLevel = -1;
+                reqList = ListView();
+            }
+            wheelSteps = 0;
+            return true;
+        }
+        break;
+    case TAB_ITEMS: lv = &itemList; n = needed.size(); break;
+    case TAB_CRAFTS: lv = &craftList; n = visibleCrafts().size(); break;
+    case TAB_TIMERS: lv = &timerList; n = st.timers.size(); break;
+    case TAB_AMMO: lv = &ammoList; n = ammoRows.size(); break;
+    case TAB_SETTINGS: lv = &settingsList; n = SET_COUNT; confirmReset = false; break;
+    case TAB_DATABASE:
+        if (openQuest < 0) {
+            lv = &dbList;
+            n = dbSection == DB_ITEMS ? dbItemRows.size() : dbRows.size();
+        }
+        break;
+    default: break;
+    }
+    if (!lv)
+        return false;
+    if (n > 0)
+        lv->sel = std::clamp(lv->sel + wheelSteps, 0, n - 1);
+    wheelSteps = 0;
+    return true;
+}
+
+// Mouse and touch on top of the pad: number keys pick a tab, taps run the area under them and
+// the wheel scrolls lists, the wiki guide, or zooms the map around the pointer.
+void App::pointerInput() {
+    int key = nxTabKey();
+    if (key >= 0 && key < TAB_COUNT)
+        setTab(key);
+    if (in.tapped) {
+        SDL_Point pt{in.tapX, in.tapY};
+        for (auto it = hits.rbegin(); it != hits.rend(); ++it)
+            if (SDL_PointInRect(&pt, &it->r)) {
+                // The handler may redraw (busy messages), which rebuilds the list.
+                auto fn = it->fn;
+                fn(in.tapCount);
+                break;
+            }
+    }
+    if (in.wheel != 0) {
+        int px = 640, py = 360;
+        bool over = nxPointer(px, py);
+        if (tab == TAB_MAPS && mapPicked && !maps.empty()) {
+            zoomMap(std::pow(1.25f, in.wheel), over ? px : 640, over ? py : 360);
+        } else if (tab == TAB_DATABASE && openQuest >= 0 && questView != 2 && px < (questView == 1 ? 1264 : 624)) {
+            wheelGuide -= in.wheel * 3;
+        } else {
+            wheelAcc -= in.wheel * 3;
+            int steps = (int)wheelAcc;
+            wheelAcc -= steps;
+            wheelSteps = std::clamp(wheelSteps + steps, -30, 30);
+        }
+    }
+    if (wheelSteps != 0 && !wheelList()) {
+        // Screens without a plain list (map picker, quest details, profile) get arrow presses.
+        press(wheelSteps > 0 ? HidNpadButton_Down : HidNpadButton_Up);
+        wheelSteps += wheelSteps > 0 ? -1 : 1;
+    }
+}
+
 
 // ---------------------------------------------------------------- database
 
@@ -1410,7 +1589,7 @@ void App::ensureDb() {
     dbLoaded = true;
     std::string name = "db-" + modeName() + ".json";
     std::string err;
-    std::vector<std::string> roots = {dataRoot, std::string(APP_DIR "/"), std::string("romfs:/")};
+    std::vector<std::string> roots = {dataRoot, std::string(APP_DIR "/"), std::string(ROMFS_ROOT)};
     for (const auto &root : roots) {
         if (root.empty())
             continue;
@@ -1430,7 +1609,7 @@ void App::ensureWiki() {
     if (wikiLoaded)
         return;
     wikiLoaded = true;
-    for (const std::string &root : {std::string(APP_DIR "/"), std::string("romfs:/")})
+    for (const std::string &root : {std::string(APP_DIR "/"), std::string(ROMFS_ROOT)})
         if (parseWiki(readFile(root + "wiki.json"), wiki) && !wiki.empty())
             break;
 }
@@ -1688,8 +1867,8 @@ SDL_Texture *App::wikiPicture(const std::string &path, bool &missing) {
     std::string sd = std::string(APP_DIR "/") + path, file;
     if (fileExists(sd))
         file = sd;
-    else if (fileExists("romfs:/" + path))
-        file = "romfs:/" + path;
+    else if (fileExists(ROMFS_ROOT + path))
+        file = ROMFS_ROOT + path;
     else if (wikiFetched)
         return nullptr; // try next frame
     else {
@@ -1819,7 +1998,8 @@ void App::inputQuest() {
     int visible = (kBottom - kTop - 110) / 26;
     int maxScroll = std::max(0, (int)questText.size() - visible);
     static float acc = 0;
-    acc += -in.ry * 0.6f;
+    acc += -in.ry * 0.6f + wheelGuide;
+    wheelGuide = 0;
     if (questView == 1) {
         if (in.up())
             acc -= 3;
@@ -1899,11 +2079,13 @@ void App::drawHeader() {
 
     int x = 64;
     ui.hint(20, 10, "L", "");
+    onTap(0, 0, x, 46, [this](int) { press(HidNpadButton_L); });
     for (int i = 0; i < TAB_COUNT; i++) {
         bool on = i == tab;
         std::string label = i == TAB_PROFILE ? who : kTabNames[i];
         int lw = ui.measure(label, FS_SMALL);
         int w = lw + 28 + (i == TAB_PROFILE ? ui.measure(mode, FS_SMALL) + 22 : 0);
+        onTap(x, 0, w + 2, 46, [this, i](int) { setTab(i); });
         if (on) {
             ui.fill(x, 4, w, 42, col::panel);
             ui.fill(x, 43, w, 3, col::accent);
@@ -1914,6 +2096,7 @@ void App::drawHeader() {
         x += w + 2;
     }
     ui.hint(x + 10, 10, "R", "");
+    onTap(x, 0, ui.hintsWidth("R", "") + 30, 46, [this](int) { press(HidNpadButton_R); });
     ui.fill(0, 46, 1280, 1, col::line);
 }
 
@@ -1927,8 +2110,32 @@ void App::drawFooter(const std::vector<std::pair<std::string, std::string>> &hin
     if (!status.empty() && fresh)
         ui.text(24, 686, status, FS_SMALL, statusColor, 1220 - w - 24);
     int x = 1256 - w + 22;
-    for (const auto &h : hints)
-        x += ui.hint(x, 685, h.first, h.second) + 22;
+    for (const auto &h : hints) {
+        int hw = ui.hint(x, 685, h.first, h.second);
+        // Every hint is also a button; a pair like "ZL/ZR" splits into its two halves.
+        static const std::map<std::string, std::pair<u64, u64>> kButtons = {
+            {"A", {HidNpadButton_A, 0}},        {"B", {HidNpadButton_B, 0}},
+            {"X", {HidNpadButton_X, 0}},        {"Y", {HidNpadButton_Y, 0}},
+            {"+", {HidNpadButton_Plus, 0}},     {"-", {HidNpadButton_Minus, 0}},
+            {"R3", {HidNpadButton_StickR, 0}},  {">", {HidNpadButton_Right, 0}},
+            {"ZL/ZR", {HidNpadButton_ZL, HidNpadButton_ZR}},
+            {"</>", {HidNpadButton_Left, HidNpadButton_Right}},
+            {"^/v", {HidNpadButton_Up, HidNpadButton_Down}},
+        };
+        auto it = kButtons.find(h.first);
+        if (h.first == "A/X") {
+            onTap(x - 8, 678, hw / 2 + 8, 42, [this](int) { zoomMap(1.5f, 640, 363); });
+            onTap(x + hw / 2, 678, hw - hw / 2 + 8, 42, [this](int) { zoomMap(1 / 1.5f, 640, 363); });
+        } else if (it != kButtons.end() && it->second.second) {
+            u64 a = it->second.first, b = it->second.second;
+            onTap(x - 8, 678, hw / 2 + 8, 42, [this, a](int) { press(a); });
+            onTap(x + hw / 2, 678, hw - hw / 2 + 8, 42, [this, b](int) { press(b); });
+        } else if (it != kButtons.end()) {
+            u64 a = it->second.first;
+            onTap(x - 8, 678, hw + 16, 42, [this, a](int) { press(a); });
+        }
+        x += hw + 22;
+    }
 }
 
 void App::drawEmpty(const std::string &title, const std::string &sub) {
@@ -1950,6 +2157,14 @@ void App::drawStations() {
         const Station &s = data.stations[idx];
         int y = kTop + i * rowH;
         bool on = idx == stationList.sel;
+        onTap(16, y, 424, rowH - 4, [this, idx](int) {
+            if (stationList.sel != idx) {
+                stationList.sel = idx;
+                viewLevel = -1;
+                reqList = ListView();
+            }
+            reqFocus = false;
+        });
         if (on) {
             ui.fill(16, y, 424, rowH - 4, reqFocus ? col::panel : col::panelHi);
             ui.fill(16, y, 4, rowH - 4, col::accent);
@@ -1987,6 +2202,10 @@ void App::drawStations() {
         cx -= 38;
         SDL_Color c = l <= built ? col::good : (l == built + 1 ? col::accent : col::faint);
         ui.fill(cx, kTop + 16, 34, 30, l == lvl ? c : col::cell);
+        onTap(cx, kTop + 16, 34, 30, [this, l](int) {
+            viewLevel = l;
+            reqList = ListView();
+        });
         std::string t = std::to_string(l);
         ui.text(cx + 17 - ui.measure(t, FS_SMALL) / 2, kTop + 18, t, FS_SMALL, l == lvl ? col::bg : c);
     }
@@ -2018,6 +2237,10 @@ void App::drawStations() {
         const ReqItem &r = L->items[idx];
         int ry = y + i * ih;
         bool on = reqFocus && idx == reqList.sel;
+        onTap(px + 8, ry, pw - 24, ih - 4, [this, idx](int n) {
+            reqFocus = true;
+            listTap(reqList, idx, n);
+        });
         if (on) {
             ui.fill(px + 8, ry, pw - 24, ih - 4, col::panelHi);
             ui.fill(px + 8, ry, 4, ih - 4, col::accent);
@@ -2063,6 +2286,7 @@ void App::drawItems() {
         const NeededItem &n = needed[idx];
         int y = top + i * rowH;
         bool on = idx == itemList.sel;
+        onTap(16, y, 1240, rowH - 6, [this, idx](int n) { listTap(itemList, idx, n, 0); });
         ui.fill(16, y, 1240, rowH - 6, on ? col::panelHi : col::panel);
         if (on)
             ui.fill(16, y, 4, rowH - 6, col::accent);
@@ -2083,7 +2307,8 @@ void App::drawItems() {
 void App::drawCrafts() {
     auto list = visibleCrafts();
     std::string filter = craftFilter == 0 ? "Crafts at your built stations" : data.stations[craftFilter - 1].name;
-    ui.text(28, kTop - 4, "<  " + filter + "  >", FS_BODY, col::accent);
+    int fw = ui.text(28, kTop - 4, "<  " + filter + "  >", FS_BODY, col::accent);
+    filterTaps(20, kTop - 8, fw + 16, 36);
     ui.textRight(1252, kTop, std::to_string(list.size()) + " recipes", FS_SMALL, col::dim);
     int top = kTop + 36;
     int rowH = 72;
@@ -2100,6 +2325,7 @@ void App::drawCrafts() {
         const Craft &c = *list[idx];
         int y = top + i * rowH;
         bool on = idx == craftList.sel;
+        onTap(16, y, 1240, rowH - 6, [this, idx](int n) { listTap(craftList, idx, n); });
         ui.fill(16, y, 1240, rowH - 6, on ? col::panelHi : col::panel);
         if (on)
             ui.fill(16, y, 4, rowH - 6, col::accent);
@@ -2148,6 +2374,7 @@ void App::drawTimers() {
         const Craft *c = craftById(t.craftId);
         int y = kTop + i * rowH;
         bool on = idx == timerList.sel;
+        onTap(16, y, 1240, rowH - 6, [this, idx](int n) { listTap(timerList, idx, n); });
         ui.fill(16, y, 1240, rowH - 6, on ? col::panelHi : col::panel);
         if (on)
             ui.fill(16, y, 4, rowH - 6, col::accent);
@@ -2186,10 +2413,10 @@ void App::drawTiles(const std::vector<SDL_Texture *> &tiles, int imgW, int imgH,
 // Draws the pieces of the sharpest needed level over the overview. x, y, w, h is the whole map on screen.
 void App::drawLevels(const std::string &image, const std::vector<MapLevel> &levels, int overviewW, float x, float y,
                      float w, float h, int top, int bottom) {
-    if (levels.empty() || w <= overviewW * 1.1f || image.size() < 4)
+    if (levels.empty() || w * ui.pixelScale() <= overviewW * 1.1f || image.size() < 4)
         return;
     int k = 0;
-    while (k + 1 < (int)levels.size() && levels[k].w < w * 0.9f)
+    while (k + 1 < (int)levels.size() && levels[k].w < w * 0.9f * ui.pixelScale())
         k++;
     const MapLevel &lv = levels[k];
     std::string stem = image.substr(0, image.size() - 4) + "/" + std::to_string(k) + "/";
@@ -2225,6 +2452,10 @@ void App::drawMapPicker() {
         int col = i % kPickCols, row = i / kPickCols - firstRow;
         int x = 16 + col * (cw + gap), y = kTop - 8 + row * (ch + gap);
         bool on = i == pickSel;
+        onTap(x, y, cw, ch, [this, i](int) {
+            pickSel = i;
+            openMap(i);
+        });
         ui.fill(x, y, cw, ch, on ? col::panelHi : col::panel);
         auto it = mapThumbs.find(m.thumb);
         if (it == mapThumbs.end() && !m.thumb.empty()) {
@@ -2308,6 +2539,11 @@ void App::drawMaps() {
                 continue;
             float x = ox + mk.u * dw, y = oy + mk.v * dh;
             float rr = sel ? r + 4 : r;
+            if (pass == 0 && y >= top && y < bottom) {
+                int pos = std::find(vis.begin(), vis.end(), i) - vis.begin();
+                int hr = int(rr) + 6;
+                onTap(int(x) - hr, int(y) - hr, hr * 2, hr * 2, [this, pos](int) { markerSel = pos; });
+            }
             ui.disc(x, y, rr + 2.5f, col::shadow);
             ui.disc(x, y, rr, kMarkerColor[mk.type]);
             if (mk.type == MK_BOSS)
@@ -2349,6 +2585,7 @@ void App::drawMaps() {
         for (int i = n - 1; i >= 0; i--) {
             int ry = y + 4 + (n - 1 - i) * rowH;
             bool on = i == mapFloor;
+            onTap(x, ry, w, rowH, [this, i](int) { mapFloor = i; });
             if (on)
                 ui.fill(x + 4, ry, w - 8, rowH, col::panelHi);
             ui.fill(x + 4, ry, 3, rowH, on ? col::accent : (i == m->baseFloor ? col::faint : SDL_Color{0, 0, 0, 0}));
@@ -2362,6 +2599,7 @@ void App::drawMaps() {
         int tw = ui.measure(t, FS_SMALL);
         ui.fill(12, 12, tw + 20, 32, SDL_Color{14, 15, 13, 200});
         ui.text(22, 16, t, FS_SMALL, col::dim);
+        onTap(12, 12, tw + 20, 32, [this](int) { mapFull = false; });
         ui.clip(nullptr);
         return;
     }
@@ -2385,6 +2623,10 @@ void App::drawMaps() {
     for (int t = 0; t < MK_COUNT; t++) {
         bool on = markerFilter < 0 || markerFilter == t;
         int y = ly + 8 + t * 28;
+        onTap(16, y, 250, 28, [this, t](int) {
+            markerFilter = markerFilter == t ? -1 : t;
+            markerSel = -1;
+        });
         ui.disc(34, y + 12, 7, on ? kMarkerColor[t] : col::faint);
         ui.text(52, y, std::string(kMarkerName[t]) + "  " + std::to_string(counts[t]), FS_SMALL,
                 on ? col::text : col::faint);
@@ -2424,18 +2666,30 @@ void App::drawDbHeader() {
         bool on = i == dbSection;
         int w = ui.measure(kDbNames[i], FS_BODY) + 28;
         ui.fill(x, kTop - 8, w, 36, on ? col::accent : col::panel);
+        onTap(x, kTop - 8, w, 36, [this, i](int) {
+            if (dbSection == i)
+                return;
+            dbSection = i;
+            dbFilter = 0;
+            dbList = ListView();
+            dbDirty = true;
+        });
         ui.text(x + 14, kTop - 6, kDbNames[i], FS_BODY, on ? col::bg : col::dim);
         x += w + 6;
     }
     ui.hint(x + 6, kTop - 3, "ZL/ZR", "");
-    x += 90;
+    x += std::max(90, ui.hintsWidth("ZL/ZR", "") + 24);
     int nf = filterCount(dbSection, db);
     if (nf > 0) {
         std::string f = dbFilter == 0 ? "All traders" : db.traders[dbFilter - 1];
-        ui.text(x, kTop - 4, "<  " + f + "  >", FS_BODY, col::accent, 300);
+        int fw = ui.text(x, kTop - 4, "<  " + f + "  >", FS_BODY, col::accent, 300);
+        filterTaps(x - 8, kTop - 8, fw + 16, 36);
     }
-    if (!dbSearch.empty())
-        drawBadge(1256 - ui.measure("Search: " + dbSearch, FS_SMALL) - 14, kTop - 2, "Search: " + dbSearch, col::info);
+    if (!dbSearch.empty()) {
+        int bw = drawBadge(1256 - ui.measure("Search: " + dbSearch, FS_SMALL) - 14, kTop - 2, "Search: " + dbSearch,
+                           col::info);
+        onTap(1256 - bw, kTop - 6, bw, 32, [this](int) { press(HidNpadButton_X); });
+    }
 }
 
 void App::drawQuestList() {
@@ -2450,6 +2704,7 @@ void App::drawQuestList() {
         int y = top + i * rowH;
         bool on = idx == dbList.sel;
         bool done = st.tasksDone.count(q.id) > 0;
+        onTap(16, y, 1240, rowH - 6, [this, idx](int n) { listTap(dbList, idx, n); });
         ui.fill(16, y, 1240, rowH - 6, on ? col::panelHi : col::panel);
         if (on)
             ui.fill(16, y, 4, rowH - 6, col::accent);
@@ -2558,9 +2813,12 @@ void App::drawAmmo() {
     }
     // Caliber filter and search above the list.
     std::string cal = ammoCal == 0 ? "All calibers" : db.calibers[ammoCal - 1];
-    ui.text(24, kTop - 6, "<  " + cal + "  >", FS_BODY, col::accent, 420);
-    if (!ammoSearch.empty())
-        drawBadge(460, kTop - 4, "Search: " + ammoSearch, col::info);
+    int fw = ui.text(24, kTop - 6, "<  " + cal + "  >", FS_BODY, col::accent, 420);
+    filterTaps(16, kTop - 10, fw + 16, 36);
+    if (!ammoSearch.empty()) {
+        int bw = drawBadge(460, kTop - 4, "Search: " + ammoSearch, col::info);
+        onTap(460, kTop - 8, bw, 32, [this](int) { press(HidNpadButton_X); });
+    }
 
     const int lx = 16, lw = 620, rowH = 40, top = kTop + 66;
     static const char *cols[] = {"Dmg", "Pen", "Arm", "Frag"};
@@ -2576,6 +2834,7 @@ void App::drawAmmo() {
         const Ammo &a = db.ammo[ammoRows[idx]];
         int y = top + i * rowH;
         bool on = idx == ammoList.sel;
+        onTap(lx, y, lw, rowH - 4, [this, idx](int n) { listTap(ammoList, idx, n); });
         if (on) {
             ui.fill(lx, y, lw, rowH - 4, col::panelHi);
             ui.fill(lx, y, 4, rowH - 4, col::accent);
@@ -2784,6 +3043,7 @@ void App::drawKeys() {
         const KeyInfo &k = db.keys[dbRows[idx]];
         int y = top + i * rowH;
         bool on = idx == dbList.sel;
+        onTap(16, y, 600, rowH - 4, [this, idx](int n) { listTap(dbList, idx, n); });
         ui.fill(16, y, 600, rowH - 4, on ? col::panelHi : col::panel);
         if (on)
             ui.fill(16, y, 4, rowH - 4, col::accent);
@@ -2818,6 +3078,7 @@ void App::drawDbItems() {
         const DbItem &it = db.items.at(id);
         int y = top + i * rowH;
         bool on = idx == dbList.sel;
+        onTap(16, y, 600, rowH - 4, [this, idx](int n) { listTap(dbList, idx, n, 0); });
         ui.fill(16, y, 600, rowH - 4, on ? col::panelHi : col::panel);
         if (on)
             ui.fill(16, y, 4, rowH - 4, col::accent);
@@ -2927,6 +3188,15 @@ void App::drawQuest() {
             continue;
         }
         bool on = i == qrowSel;
+        if (r.kind == QRow::OBJ || r.kind == QRow::ITEM) {
+            int y0 = std::max(y, top), y1 = std::min(y + r.h, kBottom);
+            if (y1 > y0)
+                onTap(rx + 8, y0, rw - 16, y1 - y0, [this, i](int n) {
+                    qrowSel = i;
+                    if (n >= 2)
+                        press(HidNpadButton_A);
+                });
+        }
         switch (r.kind) {
         case QRow::HEAD:
             ui.text(rx + 16, y + 8, r.text, FS_BODY, col::accent);
@@ -3159,6 +3429,12 @@ void App::drawSettings() {
     for (int i = 0; i < SET_COUNT; i++) {
         int y = kTop + i * 52;
         bool on = i == settingsList.sel;
+        onTap(16, y, 820, 46, [this, i](int) {
+            if (settingsList.sel != i)
+                confirmReset = false;
+            settingsList.sel = i;
+            press(HidNpadButton_A);
+        });
         ui.fill(16, y, 820, 46, on ? col::panelHi : col::panel);
         if (on)
             ui.fill(16, y, 4, 46, col::accent);
@@ -3213,6 +3489,7 @@ void App::drawSettings() {
 void App::draw() {
     if (needDirty)
         rebuildNeeded();
+    hits.clear();
     ui.clear();
     if (!(tab == TAB_MAPS && mapFull && !maps.empty()))
         drawHeader();

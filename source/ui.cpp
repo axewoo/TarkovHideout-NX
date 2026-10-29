@@ -1,6 +1,6 @@
 #include "ui.h"
 
-#include <switch.h>
+#include "platform.h"
 
 #include <algorithm>
 
@@ -19,20 +19,23 @@ bool Ui::init() {
     if (TTF_Init() < 0)
         return false;
     IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG);
-    window = SDL_CreateWindow("Tarkov Hideout", 0, 0, 1280, 720, 0);
+    window = SDL_CreateWindow("Tarkov Hideout", 0, 0, 1280, 720, NX_WINDOW_FLAGS);
     if (!window)
         return false;
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!renderer)
         return false;
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    nxWindowCreated(window, renderer);
 
     // The system's shared font avoids shipping a font file.
     PlFontData font;
     if (R_FAILED(plGetSharedFontByType(&font, PlSharedFontType_Standard)))
         return false;
+    fontData = font.address;
+    fontSize = font.size;
     for (int i = 0; i < FS_COUNT; i++) {
-        SDL_RWops *rw = SDL_RWFromConstMem(font.address, font.size);
+        SDL_RWops *rw = SDL_RWFromConstMem(fontData, fontSize);
         fonts[i] = TTF_OpenFontRW(rw, 1, kFontPx[i]);
         if (!fonts[i])
             return false;
@@ -41,12 +44,35 @@ bool Ui::init() {
     return true;
 }
 
+// A window larger than the 1280 x 720 layout renders text from bigger fonts so it stays sharp.
+void Ui::updateScale() {
+    float s = nxUiScale();
+    if (std::fabs(s - scale) < 0.01f)
+        return;
+    scale = s;
+    for (auto &[k, c] : cache)
+        SDL_DestroyTexture(c.tex);
+    cache.clear();
+    for (auto &f : drawFonts) {
+        if (f)
+            TTF_CloseFont(f);
+        f = nullptr;
+    }
+    if (std::fabs(scale - 1) < 0.01f)
+        return;
+    for (int i = 0; i < FS_COUNT; i++)
+        drawFonts[i] = TTF_OpenFontRW(SDL_RWFromConstMem(fontData, fontSize), 1, int(kFontPx[i] * scale + 0.5f));
+}
+
 void Ui::shutdown() {
     setIcons({});
     for (auto &[k, c] : cache)
         SDL_DestroyTexture(c.tex);
     cache.clear();
     for (auto &f : fonts)
+        if (f)
+            TTF_CloseFont(f);
+    for (auto &f : drawFonts)
         if (f)
             TTF_CloseFont(f);
     if (renderer)
@@ -59,6 +85,7 @@ void Ui::shutdown() {
 }
 
 void Ui::clear() {
+    updateScale();
     SDL_SetRenderDrawColor(renderer, col::bg.r, col::bg.g, col::bg.b, 255);
     SDL_RenderClear(renderer);
 }
@@ -116,12 +143,14 @@ static bool roundButton(const std::string &b) {
     return b == "A" || b == "B" || b == "X" || b == "Y";
 }
 
-int Ui::hintsWidth(const std::string &button, const std::string &label) {
+int Ui::hintsWidth(const std::string &name, const std::string &label) {
+    const std::string &button = nxButtonLabel(name);
     int bw = roundButton(button) ? 26 : measure(button, FS_SMALL) + 16;
     return bw + 8 + measure(label, FS_SMALL);
 }
 
-int Ui::hint(int x, int y, const std::string &button, const std::string &label) {
+int Ui::hint(int x, int y, const std::string &name, const std::string &label) {
+    const std::string &button = nxButtonLabel(name);
     int bw;
     if (roundButton(button)) {
         bw = 26;
@@ -218,11 +247,12 @@ Ui::Cached *Ui::get(const std::string &s, FontSize fs, SDL_Color c) {
         it->second.lastUsed = frame;
         return &it->second;
     }
-    SDL_Surface *surf = TTF_RenderUTF8_Blended(fonts[fs], s.c_str(), c);
+    TTF_Font *font = drawFonts[fs] ? drawFonts[fs] : fonts[fs];
+    SDL_Surface *surf = TTF_RenderUTF8_Blended(font, s.c_str(), c);
     if (!surf)
         return nullptr;
     SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
-    Cached entry{tex, surf->w, surf->h, frame};
+    Cached entry{tex, surf->w / scale, surf->h / scale, frame};
     SDL_FreeSurface(surf);
     if (!tex)
         return nullptr;
@@ -289,9 +319,9 @@ int Ui::text(int x, int y, const std::string &s, FontSize fs, SDL_Color c, int m
     Cached *t = get(fit(s, fs, maxW), fs, c);
     if (!t)
         return 0;
-    SDL_Rect dst{x, y, t->w, t->h};
-    SDL_RenderCopy(renderer, t->tex, nullptr, &dst);
-    return t->w;
+    SDL_FRect dst{float(x), float(y), t->w, t->h};
+    SDL_RenderCopyF(renderer, t->tex, nullptr, &dst);
+    return int(t->w + 0.5f);
 }
 
 int Ui::textRight(int right, int y, const std::string &s, FontSize fs, SDL_Color c) {

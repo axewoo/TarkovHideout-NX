@@ -61,6 +61,8 @@ public:
     int textRight(int right, int y, const std::string &s, FontSize fs, SDL_Color c);
     int measure(const std::string &s, FontSize fs);
     int lineHeight(FontSize fs) const { return lineH[fs]; }
+    // Window pixels per layout pixel; above 1 when a desktop window is bigger than 1280 x 720.
+    float pixelScale() const { return scale; }
     // Splits text into lines no wider than w, keeping explicit line breaks.
     std::vector<std::string> wrap(const std::string &s, FontSize fs, int w);
 
@@ -70,16 +72,21 @@ public:
 private:
     struct Cached {
         SDL_Texture *tex;
-        int w, h;
+        float w, h;  // layout pixels
         unsigned lastUsed;
     };
     Cached *get(const std::string &s, FontSize fs, SDL_Color c);
     std::string fit(const std::string &s, FontSize fs, int maxW);
+    void updateScale();
 
     std::vector<SDL_Texture *> icons;
     SDL_Window *window = nullptr;
     SDL_Renderer *renderer = nullptr;
-    TTF_Font *fonts[FS_COUNT] = {};
+    TTF_Font *fonts[FS_COUNT] = {};      // layout-size fonts, used for measuring
+    TTF_Font *drawFonts[FS_COUNT] = {};  // fonts at the window scale, when it is not 1
+    const void *fontData = nullptr;
+    int fontSize = 0;
+    float scale = 1;
     int lineH[FS_COUNT] = {};
     std::unordered_map<std::string, Cached> cache;
     unsigned frame = 0;

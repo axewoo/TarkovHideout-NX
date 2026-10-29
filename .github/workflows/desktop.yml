@@ -1,0 +1,105 @@
+name: Build desktop
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    # The oldest supported runner keeps the binary working on older glibc too.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update -q && sudo apt-get install -y -q libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libcurl4-openssl-dev
+
+      - name: Build
+        run: cmake -S desktop -B build-desktop -DCMAKE_BUILD_TYPE=Release && cmake --build build-desktop -j$(nproc)
+
+      - name: Package
+        run: |
+          P=TarkovHideout-linux
+          mkdir -p $P
+          cp build-desktop/TarkovHideout desktop/font.otf desktop/icon.png desktop/font-LICENSE.txt desktop/THIRD-PARTY-NOTICES.txt LICENSE $P/
+          cp desktop/README.txt $P/README.txt
+          cp desktop/TarkovHideout.desktop $P/
+          git clone -q --depth 1 -b data "https://github.com/${{ github.repository }}" $P/data && rm -rf $P/data/.git ||
+            echo "::warning::data branch unavailable, the app downloads its data on first launch"
+          tar -czf TarkovHideout-linux-x64.tar.gz $P
+          du -sh TarkovHideout-linux-x64.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TarkovHideout-linux-x64
+          path: TarkovHideout-linux-x64.tar.gz
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: TarkovHideout-linux-x64.tar.gz
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git zip
+            mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-SDL2 mingw-w64-ucrt-x86_64-SDL2_ttf
+            mingw-w64-ucrt-x86_64-SDL2_image mingw-w64-ucrt-x86_64-curl
+
+      - name: Build
+        run: cmake -S desktop -B build-desktop -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build-desktop
+
+      - name: Package
+        run: |
+          P=TarkovHideout-windows
+          mkdir -p $P
+          cp build-desktop/TarkovHideout.exe desktop/font.otf desktop/icon.png desktop/font-LICENSE.txt desktop/THIRD-PARTY-NOTICES.txt LICENSE $P/
+          cp desktop/README.txt $P/README.txt
+          # Every DLL the program loads from MSYS2, including the ones SDL_image opens at run time.
+          for f in $P/TarkovHideout.exe /ucrt64/bin/SDL2_image.dll; do
+            ldd "$f" | awk '/\/ucrt64\// {print $3}' | xargs -r -I{} cp -n {} $P/
+          done
+          cp -n /ucrt64/bin/libjpeg-8.dll /ucrt64/bin/libpng16-16.dll $P/ 2>/dev/null || true
+          ls $P
+          git clone -q --depth 1 -b data "https://github.com/${{ github.repository }}" $P/data && rm -rf $P/data/.git ||
+            echo "::warning::data branch unavailable, the app downloads its data on first launch"
+          zip -qr TarkovHideout-windows-x64.zip $P
+          du -sh TarkovHideout-windows-x64.zip
+
+      - name: Smoke test
+        # The program must at least start: missing DLLs fail here instead of on the user's PC.
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath TarkovHideout-windows\TarkovHideout.exe -PassThru
+          Start-Sleep -Seconds 8
+          if ($p.HasExited) { Write-Error "TarkovHideout.exe exited with code $($p.ExitCode)"; exit 1 }
+          Stop-Process -Id $p.Id
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TarkovHideout-windows-x64
+          path: TarkovHideout-windows-x64.zip
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: TarkovHideout-windows-x64.zip

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Tarkov Hideout
+Comment=Hideout, quests and maps companion for Escape from Tarkov
+Exec=TarkovHideout
+Icon=tarkov-hideout
+Categories=Game;Utility;
