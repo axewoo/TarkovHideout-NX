@@ -461,6 +461,22 @@ bool parseMaps(const std::string &text, std::vector<MapInfo> &out, std::string &
         mi.name = str(m, "name");
         mi.image = str(m, "img");
         mi.alt = str(m, "alt");
+        mi.thumb = str(m, "thumb");
+        for (const auto &f : m.value("floors", json::array())) {
+            MapFloor fl;
+            fl.name = str(f, "n");
+            fl.image = str(f, "img");
+            fl.alt = str(f, "alt");
+            for (int k = 0; k < 4; k++) {
+                if (f.contains("r") && f["r"].size() == 4)
+                    fl.r[k] = f["r"][k].get<float>();
+                if (f.contains("ar") && f["ar"].size() == 4)
+                    fl.ar[k] = f["ar"][k].get<float>();
+            }
+            if (fl.image.empty())
+                mi.baseFloor = mi.floors.size();
+            mi.floors.push_back(fl);
+        }
         mi.w = num(m, "w");
         mi.h = num(m, "h");
         mi.duration = num(m, "dur");

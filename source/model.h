@@ -181,11 +181,21 @@ struct MapMarker {
     float u, v;  // 0..1 across the map image
 };
 
+// One floor of a map. The image is the dimmed base with the floor drawn on top, covering r (0..1 of the map).
+struct MapFloor {
+    std::string name;
+    std::string image, alt;  // per style, like MapInfo::image / alt; empty for the base level
+    float r[4] = {0, 0, 1, 1}, ar[4] = {0, 0, 1, 1};
+};
+
 struct MapInfo {
     std::string id;
     std::string name;
     std::string image;  // path relative to the data root, e.g. maps/customs.jpg
     std::string alt;    // optional second style (vector plan), same framing as image
+    std::string thumb;  // small preview for the map picker
+    std::vector<MapFloor> floors;  // bottom to top; empty when the map has a single level
+    int baseFloor = 0;             // index of the ground level in floors
     int w = 0, h = 0;
     int duration = 0;   // raid minutes
     std::string players;

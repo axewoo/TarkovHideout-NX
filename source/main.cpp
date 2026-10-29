@@ -279,6 +279,13 @@ private:
     // Maps
     const MapInfo *currentMap() const { return maps.empty() ? nullptr : &maps[mapSel % maps.size()]; }
     bool ensureMapTexture();
+    bool ensureFloorTexture();
+    std::string mapFile(const MapInfo &m, const std::string &image, bool quiet);
+    void openMap(int idx);
+    void inputMapPicker();
+    void drawMapPicker();
+    void drawTiles(const std::vector<SDL_Texture *> &tiles, int imgW, int imgH, float x, float y, float w, float h,
+                   int top, int bottom);
     std::vector<int> visibleMarkers() const;
     void centerOnMarker();
 
@@ -314,6 +321,13 @@ private:
     std::string mapTexId;
     bool mapFull = false;
     bool mapPlan = false; // show the vector plan instead of the game render
+    bool mapPicked = false; // false shows the map picker
+    int pickSel = 0;
+    int mapFloor = 0;     // index into MapInfo::floors
+    std::vector<SDL_Texture *> floorTiles;
+    int floorImgW = 0, floorImgH = 0;
+    std::string floorTexId;
+    std::map<std::string, SDL_Texture *> mapThumbs;
     bool mapFailed = false;
     float mapZoom = 1, mapU = 0.5f, mapV = 0.5f;
     int markerFilter = -1;  // -1 = all, else MarkerType
@@ -514,13 +528,20 @@ bool App::downloadData(bool quiet) {
     }
     writeFile(std::string(APP_DIR "/") + name, r.body);
     // Map images can change with the data; drop downloaded copies so they refetch on view.
-    if (DIR *dir = opendir(APP_DIR "/maps")) {
-        while (struct dirent *e = readdir(dir))
-            if (e->d_name[0] != '.')
-                remove((std::string(APP_DIR "/maps/") + e->d_name).c_str());
-        closedir(dir);
+    for (const char *sub : {"/maps/", "/maps/floors/", "/maps/thumbs/"}) {
+        std::string d = std::string(APP_DIR) + sub;
+        if (DIR *dir = opendir(d.c_str())) {
+            while (struct dirent *e = readdir(dir))
+                if (e->d_name[0] != '.')
+                    remove((d + e->d_name).c_str());
+            closedir(dir);
+        }
     }
     freeMapTiles();
+    for (auto &kv : mapThumbs)
+        if (kv.second)
+            SDL_DestroyTexture(kv.second);
+    mapThumbs.clear();
     wikiLoaded = false;
     loadData();
     setStatus("Hideout data updated (" + data.generated + ")", col::good);
@@ -997,32 +1018,70 @@ bool App::ensureMapTexture() {
     freeMapTiles();
     mapTexId = image;
     mapFailed = false;
-    std::string sd = std::string(APP_DIR "/") + image;
-    std::string path;
-    if (fileExists(sd))
-        path = sd;
-    else if (fileExists("romfs:/" + image))
-        path = "romfs:/" + image;
-    else {
-        busy("Downloading " + m->name + " map...");
-        HttpResult r = httpGet(DATA_URL + image);
-        if (r.ok && r.status == 200 && writeFile(sd, r.body)) {
-            path = sd;
-            setStatus(m->name + " map saved for offline use", col::good);
-        } else {
-            setStatus("Could not download the " + m->name + " map", col::bad);
-        }
-    }
+    std::string path = mapFile(*m, image, false);
     if (!path.empty() && !ui.loadImageTiles(path, kMapTile, mapTiles, mapImgW, mapImgH))
         setStatus("Not enough memory for the " + m->name + " map", col::bad);
     mapFailed = mapTiles.empty();
     return !mapFailed;
 }
 
+// Finds a map image on the SD card or in romfs, downloading it once if neither has it.
+std::string App::mapFile(const MapInfo &m, const std::string &image, bool quiet) {
+    std::string sd = std::string(APP_DIR "/") + image;
+    if (fileExists(sd))
+        return sd;
+    if (fileExists("romfs:/" + image))
+        return "romfs:/" + image;
+    if (quiet)
+        return "";
+    busy("Downloading " + m.name + " map...");
+    HttpResult r = httpGet(DATA_URL + image);
+    size_t slash = image.rfind('/');
+    if (slash != std::string::npos)
+        mkdir((std::string(APP_DIR "/") + image.substr(0, slash)).c_str(), 0777);
+    if (r.ok && r.status == 200 && writeFile(sd, r.body)) {
+        setStatus(m.name + " map saved for offline use", col::good);
+        return sd;
+    }
+    setStatus("Could not download the " + m.name + " map", col::bad);
+    return "";
+}
+
+bool App::ensureFloorTexture() {
+    const MapInfo *m = currentMap();
+    if (!m || mapFloor == m->baseFloor || mapFloor >= (int)m->floors.size())
+        return false;
+    const MapFloor &f = m->floors[mapFloor];
+    const std::string &image = mapPlan && !f.alt.empty() ? f.alt : f.image;
+    if (floorTexId == image)
+        return !floorTiles.empty();
+    for (SDL_Texture *t : floorTiles)
+        SDL_DestroyTexture(t);
+    floorTiles.clear();
+    floorTexId = image;
+    std::string path = mapFile(*m, image, false);
+    if (!path.empty())
+        ui.loadImageTiles(path, kMapTile, floorTiles, floorImgW, floorImgH);
+    return !floorTiles.empty();
+}
+
+void App::openMap(int idx) {
+    mapSel = idx;
+    mapPicked = true;
+    mapZoom = 1;
+    mapU = mapV = 0.5f;
+    markerSel = -1;
+    mapFloor = maps[idx].baseFloor;
+}
+
 void App::freeMapTiles() {
     for (SDL_Texture *t : mapTiles)
         SDL_DestroyTexture(t);
     mapTiles.clear();
+    for (SDL_Texture *t : floorTiles)
+        SDL_DestroyTexture(t);
+    floorTiles.clear();
+    floorTexId.clear();
 }
 
 void App::mapViewport(int &top, int &bottom) const {
@@ -1030,15 +1089,34 @@ void App::mapViewport(int &top, int &bottom) const {
     bottom = mapFull ? 720 : kMapBottom;
 }
 
+static const int kPickCols = 4;
+
+void App::inputMapPicker() {
+    int n = maps.size();
+    pickSel = std::clamp(pickSel, 0, n - 1);
+    if (in.left() && pickSel % kPickCols > 0)
+        pickSel--;
+    if (in.right() && pickSel % kPickCols < kPickCols - 1 && pickSel + 1 < n)
+        pickSel++;
+    if (in.up() && pickSel >= kPickCols)
+        pickSel -= kPickCols;
+    if (in.downDir() && pickSel + kPickCols < n)
+        pickSel += kPickCols;
+    if (in.pressed(HidNpadButton_A))
+        openMap(pickSel);
+}
+
 void App::inputMaps() {
     if (maps.empty())
         return;
-    if (in.pressed(HidNpadButton_ZL) || in.pressed(HidNpadButton_ZR)) {
+    if (!mapPicked) {
+        inputMapPicker();
+        return;
+    }
+    const MapInfo *cm = currentMap();
+    if ((in.pressed(HidNpadButton_ZL) || in.pressed(HidNpadButton_ZR)) && !cm->floors.empty()) {
         int d = in.pressed(HidNpadButton_ZR) ? 1 : -1;
-        mapSel = (mapSel + d + maps.size()) % maps.size();
-        mapZoom = 1;
-        mapU = mapV = 0.5f;
-        markerSel = -1;
+        mapFloor = std::clamp(mapFloor + d, 0, (int)cm->floors.size() - 1);
         return;
     }
     auto vis = visibleMarkers();
@@ -1069,9 +1147,9 @@ void App::inputMaps() {
         return;
     }
     if (in.pressed(HidNpadButton_B)) {
-        mapZoom = 1;
-        mapU = mapV = 0.5f;
-        markerSel = -1;
+        mapPicked = false;
+        pickSel = mapSel;
+        return;
     }
 
     // Right stick or A/X zooms, left stick or touch pans.
@@ -1279,8 +1357,7 @@ void App::showPins(const std::string &label, const std::vector<Pin> &list) {
     pins = list;
     pinLabel = label;
     pinReturn = true;
-    mapSel = idx;
-    markerSel = -1;
+    openMap(idx);
     // Center on the pins of this map and zoom so they all stay in view.
     float u0 = 1, v0 = 1, u1 = 0, v1 = 0;
     for (const Pin &p : list)
@@ -1857,11 +1934,68 @@ void App::drawTimers() {
     drawFooter({{"A", "Collect"}, {"X", "Cancel"}});
 }
 
+void App::drawTiles(const std::vector<SDL_Texture *> &tiles, int imgW, int imgH, float x, float y, float w, float h,
+                    int top, int bottom) {
+    // Tiles share rounded edges so no seams open between them.
+    int cols = (imgW + kMapTile - 1) / kMapTile;
+    float sx = w / imgW, sy = h / imgH;
+    for (int i = 0; i < (int)tiles.size(); i++) {
+        int px = i % cols * kMapTile, py = i / cols * kMapTile;
+        int pw = std::min(kMapTile, imgW - px), ph = std::min(kMapTile, imgH - py);
+        float x0 = std::round(x + px * sx), x1 = std::round(x + (px + pw) * sx);
+        float y0 = std::round(y + py * sy), y1 = std::round(y + (py + ph) * sy);
+        if (x1 < 0 || x0 > 1280 || y1 < top || y0 > bottom)
+            continue;
+        SDL_FRect dst{x0, y0, x1 - x0, y1 - y0};
+        ui.image(tiles[i], nullptr, &dst);
+    }
+}
+
+void App::drawMapPicker() {
+    int n = maps.size();
+    const int gap = 12, cw = (1248 - gap * (kPickCols - 1)) / kPickCols, thumbH = 96, ch = 140;
+    int rows = (n + kPickCols - 1) / kPickCols;
+    int visible = std::max(1, (kBottom - kTop + 8 + gap) / (ch + gap));
+    int firstRow = std::clamp(pickSel / kPickCols - visible + 1, 0, std::max(0, rows - visible));
+    for (int i = firstRow * kPickCols; i < n && i < (firstRow + visible) * kPickCols; i++) {
+        const MapInfo &m = maps[i];
+        int col = i % kPickCols, row = i / kPickCols - firstRow;
+        int x = 16 + col * (cw + gap), y = kTop - 8 + row * (ch + gap);
+        bool on = i == pickSel;
+        ui.fill(x, y, cw, ch, on ? col::panelHi : col::panel);
+        auto it = mapThumbs.find(m.thumb);
+        if (it == mapThumbs.end() && !m.thumb.empty()) {
+            std::string path = mapFile(m, m.thumb, true);
+            it = mapThumbs.emplace(m.thumb, path.empty() ? nullptr : ui.loadImage(path)).first;
+        }
+        if (it != mapThumbs.end() && it->second) {
+            SDL_FRect dst{float(x), float(y), float(cw), float(thumbH)};
+            ui.image(it->second, nullptr, &dst);
+        } else {
+            ui.fill(x, y, cw, thumbH, col::cell);
+        }
+        if (on)
+            ui.rect(x, y, cw, ch, col::accent);
+        ui.fill(x, y + thumbH, cw, 2, on ? col::accent : col::line);
+        ui.text(x + 12, y + thumbH + 6, m.name, FS_SMALL, on ? col::text : col::dim, cw - 24);
+        std::string sub = m.duration ? std::to_string(m.duration) + " min" : "";
+        if (!m.floors.empty())
+            sub += (sub.empty() ? "" : "  ") + std::to_string(m.floors.size()) + " levels";
+        ui.textRight(x + cw - 12, y + thumbH + 8, sub, FS_SMALL, col::faint);
+    }
+    drawScrollbar(1268, kTop - 8, kBottom - kTop + 8, rows, visible, firstRow);
+    drawFooter({{"A", "Open"}, {"+", "Quit"}});
+}
+
 void App::drawMaps() {
     const MapInfo *m = currentMap();
     if (!m) {
         drawEmpty("No map data yet.", "Connect to the internet and use Settings > Download latest hideout data.");
         drawFooter({{"+", "Quit"}});
+        return;
+    }
+    if (!mapPicked) {
+        drawMapPicker();
         return;
     }
     int top, bottom;
@@ -1879,18 +2013,14 @@ void App::drawMaps() {
     ui.clip(&clipR);
     ui.fill(0, top, 1280, bottom - top, col::bg);
     if (ensureMapTexture()) {
-        // Tiles share rounded edges so no seams open between them.
-        int cols = (mapImgW + kMapTile - 1) / kMapTile;
-        float sx = dw / mapImgW, sy = dh / mapImgH;
-        for (int i = 0; i < (int)mapTiles.size(); i++) {
-            int px = i % cols * kMapTile, py = i / cols * kMapTile;
-            int pw = std::min(kMapTile, mapImgW - px), ph = std::min(kMapTile, mapImgH - py);
-            float x0 = std::round(ox + px * sx), x1 = std::round(ox + (px + pw) * sx);
-            float y0 = std::round(oy + py * sy), y1 = std::round(oy + (py + ph) * sy);
-            if (x1 < 0 || x0 > 1280 || y1 < top || y0 > bottom)
-                continue;
-            SDL_FRect dst{x0, y0, x1 - x0, y1 - y0};
-            ui.image(mapTiles[i], nullptr, &dst);
+        drawTiles(mapTiles, mapImgW, mapImgH, ox, oy, dw, dh, top, bottom);
+        if (ensureFloorTexture()) {
+            // Floor images carry the dimmed base inside their rect; dim the rest to match.
+            const MapFloor &f = m->floors[mapFloor];
+            const float *r = mapPlan && !f.alt.empty() ? f.ar : f.r;
+            ui.fill(int(ox), int(oy), int(dw) + 1, int(dh) + 1, SDL_Color{0, 0, 0, 140});
+            drawTiles(floorTiles, floorImgW, floorImgH, ox + r[0] * dw, oy + r[1] * dh, (r[2] - r[0]) * dw,
+                      (r[3] - r[1]) * dh, top, bottom);
         }
     } else {
         ui.text(40, top + 80, "Map image unavailable offline. Connect to download it once.", FS_BODY, col::dim);
@@ -1937,9 +2067,27 @@ void App::drawMaps() {
         }
     }
 
+    // Floor list, top floor first, on the right edge.
+    if (!m->floors.empty()) {
+        int n = m->floors.size(), rowH = 34, w = 0;
+        for (const auto &f : m->floors)
+            w = std::max(w, ui.measure(f.name, FS_SMALL));
+        w += 28;
+        int x = 1264 - w, y = top + 12;
+        ui.fill(x, y, w, n * rowH + 8, SDL_Color{14, 15, 13, 215});
+        for (int i = n - 1; i >= 0; i--) {
+            int ry = y + 4 + (n - 1 - i) * rowH;
+            bool on = i == mapFloor;
+            if (on)
+                ui.fill(x + 4, ry, w - 8, rowH, col::panelHi);
+            ui.fill(x + 4, ry, 3, rowH, on ? col::accent : (i == m->baseFloor ? col::faint : SDL_Color{0, 0, 0, 0}));
+            ui.text(x + 16, ry + 4, m->floors[i].name, FS_SMALL, on ? col::text : col::dim);
+        }
+    }
+
     if (mapFull) {
         // Just a small name chip so the map gets the whole screen.
-        std::string t = m->name + "   - Exit fullscreen";
+        std::string t = m->name + (m->floors.empty() ? "" : "  " + m->floors[mapFloor].name) + "   - Exit fullscreen";
         int tw = ui.measure(t, FS_SMALL);
         ui.fill(12, 12, tw + 20, 32, SDL_Color{14, 15, 13, 200});
         ui.text(22, 16, t, FS_SMALL, col::dim);
@@ -1972,11 +2120,12 @@ void App::drawMaps() {
     }
     ui.clip(nullptr);
 
-    std::vector<std::pair<std::string, std::string>> hints;
-    if (pinReturn)
-        hints = {{"B", "Back"}, {"ZL/ZR", "Map"}, {"A/X", "Zoom"}, {"Y", "Labels"}};
-    else
-        hints = {{"ZL/ZR", "Map"}, {"</>", "Marker"}, {"^/v", "Filter"}, {"A/X", "Zoom"}, {"Y", "Labels"}};
+    std::vector<std::pair<std::string, std::string>> hints = {{"B", pinReturn ? "Back" : "Maps"}};
+    if (!m->floors.empty())
+        hints.push_back({"ZL/ZR", "Floor"});
+    if (!pinReturn)
+        hints.insert(hints.end(), {{"</>", "Marker"}, {"^/v", "Filter"}});
+    hints.insert(hints.end(), {{"A/X", "Zoom"}, {"Y", "Labels"}});
     if (!m->alt.empty())
         hints.push_back({"R3", mapPlan ? "Render" : "Plan"});
     hints.push_back({"-", "Full"});

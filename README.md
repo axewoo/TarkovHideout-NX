@@ -75,12 +75,14 @@ behind the game by a few days.
 | Crafts | A | Start a timer, or collect a finished one |
 | Crafts, Timers | X | Cancel a timer |
 | Needed items | Y | Show only found-in-raid items |
-| Maps | ZL / ZR | Previous / next map |
+| Map picker | D-pad, A | Choose a map, open it |
+| Maps | B | Back to the map picker |
+| Maps | ZL / ZR | Floor down / up (maps with several levels) |
 | Maps | Left stick, touch | Pan |
 | Maps | Right stick, A / X | Zoom in / out |
 | Maps | Left / Right | Jump between markers |
 | Maps | Up / Down | Filter marker type |
-| Maps | Y / B | Toggle labels / reset view |
+| Maps | Y | Toggle labels |
 | Maps | - | Fullscreen map |
 | Maps | R3 (click right stick) | Switch between game render and vector plan |
 | Database | ZL / ZR | Switch section |
