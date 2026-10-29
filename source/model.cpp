@@ -1,6 +1,8 @@
 #include "model.h"
 
 #include <cstdio>
+#include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <sstream>
 
@@ -13,6 +15,24 @@ const Station *HideoutData::station(const std::string &id) const {
         if (s.id == id)
             return &s;
     return nullptr;
+}
+
+int HideoutData::icon(const std::string &itemId) const {
+    auto it = icons.find(itemId);
+    return it == icons.end() ? -1 : it->second;
+}
+
+int HideoutData::playerLevel(int64_t exp) const {
+    // levelExp holds the exp each level costs; level n needs the sum of the first n entries.
+    int64_t total = 0;
+    int level = 0;
+    for (int need : levelExp) {
+        total += need;
+        if (exp < total)
+            break;
+        level++;
+    }
+    return std::max(level, 1);
 }
 
 int State::builtLevel(const Station &st) const {
@@ -53,6 +73,7 @@ static std::vector<CraftItem> craftItems(const json &arr) {
         return out;
     for (const auto &e : arr) {
         CraftItem ci;
+        ci.itemId = str(e, "i");
         ci.name = str(e, "n");
         ci.shortName = str(e, "s");
         ci.count = num(e, "c", 1);
@@ -106,6 +127,17 @@ bool parseHideout(const std::string &text, HideoutData &out, std::string &err) {
         cr.rew = craftItems(c.value("rew", json::array()));
         d.crafts.push_back(cr);
     }
+    const json items = j.value("items", json::object());
+    for (auto &[k, v] : items.items())
+        if (v.is_object() && v.contains("ic") && v["ic"].is_number())
+            d.icons[k] = v["ic"].get<int>();
+    const json skills = j.value("skills", json::object());
+    for (auto &[k, v] : skills.items())
+        if (v.is_string())
+            d.skills[k] = v.get<std::string>();
+    for (const auto &e : j.value("levelExp", json::array()))
+        if (e.is_number())
+            d.levelExp.push_back(e.get<int>());
     if (d.stations.empty()) {
         err = "hideout data has no stations";
         return false;
@@ -129,6 +161,7 @@ bool loadState(const std::string &path, State &st) {
     st.syncOnLaunch = j.value("syncOnLaunch", true);
     st.lastSync = str(j, "lastSync");
     st.account = str(j, "account");
+    st.profileId = str(j, "profileId");
     st.modules.clear();
     st.parts.clear();
     st.timers.clear();
@@ -157,6 +190,7 @@ bool saveState(const std::string &path, const State &st) {
     j["syncOnLaunch"] = st.syncOnLaunch;
     j["lastSync"] = st.lastSync;
     j["account"] = st.account;
+    j["profileId"] = st.profileId;
     json mods = json::object();
     for (auto &[k, v] : st.modules)
         if (v)
@@ -219,6 +253,151 @@ bool applyTrackerProgress(const std::string &text, const HideoutData &data, Stat
             st.parts[id] = count;
     }
     st.account = str(d, "displayName");
+    return true;
+}
+
+bool parseMaps(const std::string &text, std::vector<MapInfo> &out, std::string &err) {
+    json j = json::parse(text, nullptr, false);
+    if (j.is_discarded() || !j.is_object()) {
+        err = "map data is not valid JSON";
+        return false;
+    }
+    static const std::map<std::string, MarkerType> types = {
+        {"pmc", MK_PMC}, {"scav", MK_SCAV}, {"shared", MK_SHARED}, {"transit", MK_TRANSIT}, {"boss", MK_BOSS}};
+    std::vector<MapInfo> maps;
+    for (const auto &m : j.value("maps", json::array())) {
+        MapInfo mi;
+        mi.id = str(m, "id");
+        mi.name = str(m, "name");
+        mi.image = str(m, "img");
+        mi.w = num(m, "w");
+        mi.h = num(m, "h");
+        mi.duration = num(m, "dur");
+        mi.players = str(m, "players");
+        for (const auto &k : m.value("markers", json::array())) {
+            auto t = types.find(str(k, "t"));
+            if (t == types.end())
+                continue;
+            mi.markers.push_back({t->second, str(k, "n"), k.value("u", 0.f), k.value("v", 0.f)});
+        }
+        if (!mi.image.empty() && mi.w > 0 && mi.h > 0)
+            maps.push_back(std::move(mi));
+    }
+    if (maps.empty()) {
+        err = "map data has no maps";
+        return false;
+    }
+    out = std::move(maps);
+    return true;
+}
+
+static std::string fmtInt(int64_t n) {
+    std::string s = std::to_string(n);
+    for (int i = (int)s.size() - 3; i > (s[0] == '-' ? 1 : 0); i -= 3)
+        s.insert(i, ",");
+    return s;
+}
+
+static std::string pct(int64_t a, int64_t b) {
+    if (b <= 0)
+        return "-";
+    char buf[16];
+    snprintf(buf, sizeof buf, "%.1f%%", 100.0 * a / b);
+    return buf;
+}
+
+static std::string ratio(int64_t a, int64_t b) {
+    char buf[16];
+    snprintf(buf, sizeof buf, "%.2f", b > 0 ? double(a) / b : double(a));
+    return buf;
+}
+
+// overAllCounters.Items is a list of {Key: [..], Value: n}; keys are joined with '/'.
+static std::map<std::string, int64_t> counters(const json &stats) {
+    std::map<std::string, int64_t> out;
+    if (!stats.is_object())
+        return out;
+    const json eft = stats.value("eft", json::object());
+    const json oc = eft.value("overAllCounters", json::object());
+    for (const auto &it : oc.value("Items", json::array())) {
+        std::string key;
+        for (const auto &k : it.value("Key", json::array()))
+            if (k.is_string())
+                key += (key.empty() ? "" : "/") + k.get<std::string>();
+        if (it.contains("Value") && it["Value"].is_number())
+            out[key] = it["Value"].get<int64_t>();
+    }
+    out["#time"] = eft.value("totalInGameTime", (int64_t)0);
+    return out;
+}
+
+static std::vector<ProfileStat> sideStats(const std::map<std::string, int64_t> &c, const char *side) {
+    auto get = [&](const std::string &k) {
+        auto it = c.find(k);
+        return it == c.end() ? (int64_t)0 : it->second;
+    };
+    std::string s = side;
+    int64_t raids = get("Sessions/" + s);
+    int64_t survived = get("ExitStatus/Survived/" + s);
+    int64_t kills = get("Kills"), deaths = get("Deaths");
+    std::vector<ProfileStat> out;
+    out.push_back({"Raids", fmtInt(raids)});
+    out.push_back({"Survived", fmtInt(survived) + "  (" + pct(survived, raids) + ")"});
+    out.push_back({"Killed in action", fmtInt(get("ExitStatus/Killed/" + s))});
+    out.push_back({"Run-throughs", fmtInt(get("ExitStatus/Runner/" + s))});
+    out.push_back({"Missing in action", fmtInt(get("ExitStatus/Left/" + s) + get("ExitStatus/MissingInAction/" + s))});
+    out.push_back({"Transits", fmtInt(get("ExitStatus/Transit/" + s))});
+    out.push_back({"Kills", fmtInt(kills)});
+    if (s == "Pmc") {
+        out.push_back({"Deaths", fmtInt(deaths)});
+        out.push_back({"K/D", ratio(kills, deaths)});
+        out.push_back({"PMC kills", fmtInt(get("KilledPmc"))});
+    }
+    out.push_back({"Longest survival streak", fmtInt(get("LongestWinStreak/" + s))});
+    int64_t t = get("#time");
+    if (t > 0 && s == "Pmc")
+        out.push_back({"Time in game", fmtInt(t / 3600) + " h"});
+    return out;
+}
+
+bool parseProfile(const std::string &text, const HideoutData &data, Profile &out, std::string &err) {
+    json j = json::parse(text, nullptr, false);
+    if (j.is_discarded() || !j.is_object()) {
+        err = "profile is not valid JSON";
+        return false;
+    }
+    if (j.contains("err") || !j.contains("info")) {
+        err = j.value("errmsg", std::string("profile not found"));
+        return false;
+    }
+    Profile p;
+    const json info = j["info"];
+    p.nickname = str(info, "nickname");
+    p.side = str(info, "side");
+    p.exp = info.value("experience", (int64_t)0);
+    p.prestige = num(info, "prestigeLevel");
+    int64_t upd = j.value("updated", (int64_t)0);
+    p.updated = upd > 100000000000LL ? upd / 1000 : upd;  // milliseconds in current snapshots
+    auto pmcCounters = counters(j.value("pmcStats", json::object()));
+    auto scavCounters = counters(j.value("scavStats", json::object()));
+    p.pmc = sideStats(pmcCounters, "Pmc");
+    p.scav = sideStats(scavCounters, "Scav");
+    const json skills = j.value("skills", json::object());
+    for (const auto &sk : skills.value("Common", json::array())) {
+        std::string id = str(sk, "Id");
+        double prog = sk.value("Progress", 0.0);
+        if (id.empty() || prog < 1 || id.rfind("Bot", 0) == 0)
+            continue;
+        auto it = data.skills.find(id);
+        p.skills.push_back({it != data.skills.end() ? it->second : id, float(std::min(prog / 100.0, 51.0))});
+    }
+    std::sort(p.skills.begin(), p.skills.end(),
+              [](const ProfileSkill &a, const ProfileSkill &b) { return a.level > b.level; });
+    if (p.nickname.empty()) {
+        err = "profile has no nickname";
+        return false;
+    }
+    out = std::move(p);
     return true;
 }
 

@@ -1,22 +1,29 @@
 #pragma once
 
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_image.h>
 #include <SDL2/SDL_ttf.h>
 
 #include <string>
 #include <unordered_map>
 
 namespace col {
-constexpr SDL_Color bg{18, 19, 16, 255};
-constexpr SDL_Color panel{30, 31, 27, 255};
-constexpr SDL_Color panelHi{52, 52, 44, 255};
-constexpr SDL_Color line{60, 60, 52, 255};
-constexpr SDL_Color text{226, 222, 205, 255};
-constexpr SDL_Color dim{148, 145, 130, 255};
-constexpr SDL_Color accent{196, 170, 105, 255};
-constexpr SDL_Color good{122, 178, 96, 255};
-constexpr SDL_Color warn{214, 150, 70, 255};
-constexpr SDL_Color bad{204, 92, 80, 255};
+constexpr SDL_Color bg{14, 15, 13, 255};
+constexpr SDL_Color bgTop{24, 25, 21, 255};
+constexpr SDL_Color panel{27, 28, 24, 255};
+constexpr SDL_Color panelHi{46, 46, 38, 255};
+constexpr SDL_Color cell{36, 37, 32, 255};
+constexpr SDL_Color line{58, 58, 50, 255};
+constexpr SDL_Color text{230, 226, 210, 255};
+constexpr SDL_Color dim{146, 143, 128, 255};
+constexpr SDL_Color faint{92, 90, 80, 255};
+constexpr SDL_Color accent{205, 178, 110, 255};
+constexpr SDL_Color good{126, 184, 98, 255};
+constexpr SDL_Color warn{222, 156, 72, 255};
+constexpr SDL_Color bad{212, 94, 82, 255};
+constexpr SDL_Color info{108, 164, 214, 255};
+constexpr SDL_Color violet{170, 128, 214, 255};
+constexpr SDL_Color shadow{0, 0, 0, 150};
 } // namespace col
 
 enum FontSize { FS_SMALL, FS_BODY, FS_TITLE, FS_COUNT };
@@ -30,6 +37,21 @@ public:
     void present();
     void fill(int x, int y, int w, int h, SDL_Color c);
     void rect(int x, int y, int w, int h, SDL_Color c);
+    void vgradient(int x, int y, int w, int h, SDL_Color top, SDL_Color bottom);
+    void disc(float cx, float cy, float r, SDL_Color c);
+    void progress(int x, int y, int w, int h, float frac, SDL_Color c);
+    // A button glyph ("A", "ZL", ...) followed by a label; returns the width used.
+    int hint(int x, int y, const std::string &button, const std::string &label);
+    int hintsWidth(const std::string &button, const std::string &label);
+    void clip(const SDL_Rect *r);
+
+    // Images. The icon atlas is a grid of 64 px cells, ATLAS_COLS wide.
+    SDL_Texture *loadImage(const std::string &path, int *w = nullptr, int *h = nullptr);
+    void setIcons(SDL_Texture *atlas);
+    bool hasIcons() const { return icons != nullptr; }
+    // Draws an item icon in a square cell; idx < 0 draws an empty cell.
+    void icon(int idx, int x, int y, int size);
+    void image(SDL_Texture *tex, const SDL_Rect *src, const SDL_FRect *dst);
 
     // Draws text, truncating with "..." past maxW. Returns drawn width.
     int text(int x, int y, const std::string &s, FontSize fs, SDL_Color c, int maxW = 0);
@@ -49,6 +71,7 @@ private:
     Cached *get(const std::string &s, FontSize fs, SDL_Color c);
     std::string fit(const std::string &s, FontSize fs, int maxW);
 
+    SDL_Texture *icons = nullptr;
     SDL_Window *window = nullptr;
     SDL_Renderer *renderer = nullptr;
     TTF_Font *fonts[FS_COUNT] = {};

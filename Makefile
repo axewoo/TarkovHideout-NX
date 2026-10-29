@@ -46,14 +46,14 @@ ROMFS		:=	romfs
 
 APP_TITLE   := Tarkov Hideout
 APP_AUTHOR  := axewoo
-APP_VERSION := 1.0.0
+APP_VERSION := 2.0.0
 
 #---------------------------------------------------------------------------------
 # options for code generation
 #---------------------------------------------------------------------------------
 ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 
-CFLAGS	:=	`$(PREFIX)pkg-config --cflags sdl2 SDL2_ttf libcurl` -Wall -O2 -ffunction-sections \
+CFLAGS	:=	`$(PREFIX)pkg-config --cflags sdl2 SDL2_ttf SDL2_image libcurl` -Wall -O2 -ffunction-sections \
 			$(ARCH) $(DEFINES) -DAPP_VERSION=\"$(APP_VERSION)\"
 
 CFLAGS	+=	$(INCLUDE) -D__SWITCH__
@@ -63,7 +63,7 @@ CXXFLAGS	:= $(CFLAGS) -std=gnu++17
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:=	`$(PREFIX)pkg-config --libs SDL2_ttf sdl2 libcurl` \
+LIBS	:=	`$(PREFIX)pkg-config --libs SDL2_image SDL2_ttf sdl2 libcurl` \
 			-lnx
 
 #---------------------------------------------------------------------------------

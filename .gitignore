@@ -5,3 +5,5 @@ build/
 *.map
 romfs/*.json
 __pycache__/
+romfs/icons.png
+romfs/maps/

@@ -2,7 +2,13 @@
 
 #include <switch.h>
 
+#include <algorithm>
+
+#include <cmath>
 #include <vector>
+
+static const int kAtlasCols = 32;
+static const int kIconPx = 64;
 
 static const int kFontPx[FS_COUNT] = {20, 24, 30};
 
@@ -11,6 +17,7 @@ bool Ui::init() {
         return false;
     if (TTF_Init() < 0)
         return false;
+    IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG);
     window = SDL_CreateWindow("Tarkov Hideout", 0, 0, 1280, 720, 0);
     if (!window)
         return false;
@@ -34,6 +41,8 @@ bool Ui::init() {
 }
 
 void Ui::shutdown() {
+    if (icons)
+        SDL_DestroyTexture(icons);
     for (auto &[k, c] : cache)
         SDL_DestroyTexture(c.tex);
     cache.clear();
@@ -44,6 +53,7 @@ void Ui::shutdown() {
         SDL_DestroyRenderer(renderer);
     if (window)
         SDL_DestroyWindow(window);
+    IMG_Quit();
     TTF_Quit();
     SDL_Quit();
 }
@@ -67,6 +77,104 @@ void Ui::rect(int x, int y, int w, int h, SDL_Color c) {
     SDL_Rect r{x, y, w, h};
     SDL_SetRenderDrawColor(renderer, c.r, c.g, c.b, c.a);
     SDL_RenderDrawRect(renderer, &r);
+}
+
+void Ui::vgradient(int x, int y, int w, int h, SDL_Color top, SDL_Color bottom) {
+    SDL_Vertex v[4] = {
+        {{float(x), float(y)}, top, {0, 0}},
+        {{float(x + w), float(y)}, top, {0, 0}},
+        {{float(x + w), float(y + h)}, bottom, {0, 0}},
+        {{float(x), float(y + h)}, bottom, {0, 0}},
+    };
+    int idx[6] = {0, 1, 2, 0, 2, 3};
+    SDL_RenderGeometry(renderer, nullptr, v, 4, idx, 6);
+}
+
+void Ui::disc(float cx, float cy, float r, SDL_Color c) {
+    const int n = 20;
+    SDL_Vertex v[n + 1];
+    int idx[n * 3];
+    v[0] = {{cx, cy}, c, {0, 0}};
+    for (int i = 0; i < n; i++) {
+        float a = float(i) * 2.f * float(M_PI) / n;
+        v[i + 1] = {{cx + r * std::cos(a), cy + r * std::sin(a)}, c, {0, 0}};
+        idx[i * 3] = 0;
+        idx[i * 3 + 1] = i + 1;
+        idx[i * 3 + 2] = (i + 1) % n + 1;
+    }
+    SDL_RenderGeometry(renderer, nullptr, v, n + 1, idx, n * 3);
+}
+
+void Ui::progress(int x, int y, int w, int h, float frac, SDL_Color c) {
+    frac = frac < 0 ? 0 : (frac > 1 ? 1 : frac);
+    fill(x, y, w, h, col::cell);
+    if (frac > 0)
+        fill(x, y, std::max(1, int(w * frac)), h, c);
+}
+
+static bool roundButton(const std::string &b) {
+    return b == "A" || b == "B" || b == "X" || b == "Y";
+}
+
+int Ui::hintsWidth(const std::string &button, const std::string &label) {
+    int bw = roundButton(button) ? 26 : measure(button, FS_SMALL) + 16;
+    return bw + 8 + measure(label, FS_SMALL);
+}
+
+int Ui::hint(int x, int y, const std::string &button, const std::string &label) {
+    int bw;
+    if (roundButton(button)) {
+        bw = 26;
+        disc(x + 13.f, y + 13.f, 13.f, col::text);
+    } else {
+        bw = measure(button, FS_SMALL) + 16;
+        fill(x, y + 1, bw, 24, col::text);
+    }
+    int tw = measure(button, FS_SMALL);
+    text(x + (bw - tw) / 2, y + 13 - lineH[FS_SMALL] / 2, button, FS_SMALL, col::bg);
+    text(x + bw + 8, y + 13 - lineH[FS_SMALL] / 2, label, FS_SMALL, col::dim);
+    return bw + 8 + measure(label, FS_SMALL);
+}
+
+void Ui::clip(const SDL_Rect *r) {
+    SDL_RenderSetClipRect(renderer, r);
+}
+
+SDL_Texture *Ui::loadImage(const std::string &path, int *w, int *h) {
+    SDL_Surface *surf = IMG_Load(path.c_str());
+    if (!surf)
+        return nullptr;
+    SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
+    if (tex) {
+        SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(tex, SDL_ScaleModeLinear);
+    }
+    if (w)
+        *w = surf->w;
+    if (h)
+        *h = surf->h;
+    SDL_FreeSurface(surf);
+    return tex;
+}
+
+void Ui::setIcons(SDL_Texture *atlas) {
+    if (icons)
+        SDL_DestroyTexture(icons);
+    icons = atlas;
+}
+
+void Ui::icon(int idx, int x, int y, int size) {
+    fill(x, y, size, size, col::cell);
+    if (idx >= 0 && icons) {
+        SDL_Rect src{(idx % kAtlasCols) * kIconPx, (idx / kAtlasCols) * kIconPx, kIconPx, kIconPx};
+        SDL_Rect dst{x + 1, y + 1, size - 2, size - 2};
+        SDL_RenderCopy(renderer, icons, &src, &dst);
+    }
+    rect(x, y, size, size, col::line);
+}
+
+void Ui::image(SDL_Texture *tex, const SDL_Rect *src, const SDL_FRect *dst) {
+    SDL_RenderCopyF(renderer, tex, src, dst);
 }
 
 Ui::Cached *Ui::get(const std::string &s, FontSize fs, SDL_Color c) {

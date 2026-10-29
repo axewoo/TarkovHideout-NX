@@ -36,6 +36,8 @@ MAP_ALIASES = {
     "the-lab-dark": "the-lab",
 }
 SKIP_MAPS = {"ground-zero-tutorial"}
+# PMC bots show up in the boss list on PVE; they are not worth a marker.
+PMC_BOTS = {"BEAR", "USEC", "PMC"}
 
 
 def fetch_bytes(url):
@@ -211,9 +213,12 @@ def markers(gm, proj, rect, mobs):
         p = uv(t.get("position"))
         if p:
             out.append({"t": "transit", "n": t.get("description") or "Transit", "u": p[0], "v": p[1]})
-    seen = set()
+    # Several bosses share spawn zones; one marker per spot lists them all.
+    spots = {}
     for boss in gm.get("bosses") or []:
         name = boss_name(boss.get("mob"), mobs)
+        if name in PMC_BOTS:
+            continue
         for loc in boss.get("spawnLocations") or []:
             pts = [uv(p) for p in loc.get("positions") or []]
             pts = [p for p in pts if p]
@@ -222,12 +227,12 @@ def markers(gm, proj, rect, mobs):
             u = sum(p[0] for p in pts) / len(pts)
             v = sum(p[1] for p in pts) / len(pts)
             chance = round(100 * (boss.get("spawnChance") or 0) * (loc.get("chance") or 1))
-            key = (name, round(u, 2), round(v, 2))
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append({"t": "boss", "n": f"{name} ({chance}%)" if chance else name,
-                        "u": round(u, 4), "v": round(v, 4)})
+            label = f"{name} {chance}%" if chance else name
+            spot = spots.setdefault((round(u, 2), round(v, 2)), {"u": u, "v": v, "names": []})
+            if label not in spot["names"]:
+                spot["names"].append(label)
+    for spot in spots.values():
+        out.append({"t": "boss", "n": ", ".join(spot["names"]), "u": round(spot["u"], 4), "v": round(spot["v"], 4)})
     return out
 
 
