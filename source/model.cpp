@@ -146,6 +146,173 @@ bool parseHideout(const std::string &text, HideoutData &out, std::string &err) {
     return true;
 }
 
+const DbItem *Database::item(const std::string &id) const {
+    auto it = items.find(id);
+    return it == items.end() ? nullptr : &it->second;
+}
+
+static std::vector<std::string> strings(const json &arr) {
+    std::vector<std::string> out;
+    if (arr.is_array())
+        for (const auto &e : arr)
+            if (e.is_string())
+                out.push_back(e.get<std::string>());
+    return out;
+}
+
+static std::vector<Pin> pins(const json &arr) {
+    std::vector<Pin> out;
+    if (arr.is_array())
+        for (const auto &p : arr)
+            if (p.is_array() && p.size() == 3 && p[0].is_string())
+                out.push_back({p[0].get<std::string>(), p[1].get<float>(), p[2].get<float>()});
+    return out;
+}
+
+static std::vector<ItemCount> itemCounts(const json &arr) {
+    std::vector<ItemCount> out;
+    if (arr.is_array())
+        for (const auto &p : arr)
+            if (p.is_array() && p.size() == 2 && p[0].is_string())
+                out.push_back({p[0].get<std::string>(), p[1].is_number() ? p[1].get<int>() : 1});
+    return out;
+}
+
+static std::string numberText(const json &v) {
+    if (v.is_number_integer())
+        return std::to_string(v.get<int64_t>());
+    if (v.is_number()) {
+        char buf[32];
+        snprintf(buf, sizeof buf, "%g", v.get<double>());
+        return buf;
+    }
+    return v.is_string() ? v.get<std::string>() : "";
+}
+
+bool parseDatabase(const std::string &text, Database &out, std::string &err) {
+    json j = json::parse(text, nullptr, false);
+    if (j.is_discarded() || !j.is_object()) {
+        err = "database is not valid JSON";
+        return false;
+    }
+    Database d;
+    const json items = j.value("items", json::object());
+    for (auto &[id, v] : items.items()) {
+        DbItem it;
+        it.name = str(v, "n");
+        it.shortName = str(v, "s");
+        it.category = str(v, "c");
+        it.desc = str(v, "d");
+        it.price = num(v, "p");
+        if (v.contains("t") && v["t"].is_array() && v["t"].size() == 2) {
+            it.trader = v["t"][0].is_string() ? v["t"][0].get<std::string>() : "";
+            it.traderPrice = v["t"][1].is_number() ? v["t"][1].get<int>() : 0;
+        }
+        it.weight = v.value("w", 0.f);
+        it.noFlea = v.value("nf", false);
+        it.questItem = v.value("q", false);
+        it.icon = num(v, "ic", -1);
+        d.items.emplace(id, std::move(it));
+    }
+    std::set<std::string> cals;
+    for (const auto &a : j.value("ammo", json::array())) {
+        Ammo am;
+        am.item = str(a, "i");
+        am.caliber = str(a, "cal");
+        am.damage = num(a, "dmg");
+        am.pen = num(a, "pen");
+        am.armorDamage = num(a, "ad");
+        am.frag = num(a, "fr");
+        am.speed = num(a, "v");
+        am.projectiles = num(a, "pc", 1);
+        am.tracer = a.value("tr", false);
+        cals.insert(am.caliber);
+        d.ammo.push_back(std::move(am));
+    }
+    d.calibers.assign(cals.begin(), cals.end());
+    for (const auto &k : j.value("keys", json::array())) {
+        KeyInfo ki;
+        ki.item = str(k, "i");
+        ki.uses = num(k, "u");
+        ki.quests = strings(k.value("q", json::array()));
+        ki.pins = pins(k.value("pins", json::array()));
+        d.keys.push_back(std::move(ki));
+    }
+    for (const auto &t : j.value("tasks", json::array())) {
+        Quest q;
+        q.id = str(t, "id");
+        q.name = str(t, "n");
+        q.trader = str(t, "tr");
+        q.map = str(t, "map");
+        q.faction = str(t, "fac");
+        q.wiki = str(t, "wiki");
+        q.level = num(t, "lvl");
+        q.exp = num(t, "exp");
+        q.kappa = t.value("k", false);
+        q.lightkeeper = t.value("lk", false);
+        q.prereqs = strings(t.value("pre", json::array()));
+        q.traderReqs = strings(t.value("trl", json::array()));
+        q.keys = strings(t.value("keys", json::array()));
+        for (const auto &o : t.value("obj", json::array())) {
+            Objective ob;
+            ob.desc = str(o, "d");
+            ob.type = str(o, "t");
+            ob.count = num(o, "c");
+            ob.more = num(o, "more");
+            ob.optional = o.value("o", false);
+            ob.fir = o.value("fir", false);
+            ob.items = strings(o.value("it", json::array()));
+            ob.pins = pins(o.value("pins", json::array()));
+            if (o.contains("gs") && o["gs"].is_object()) {
+                const json &g = o["gs"];
+                ob.hasBuild = true;
+                ob.build.weapon = str(g, "w");
+                for (const auto &at : g.value("attrs", json::array()))
+                    if (at.is_array() && at.size() == 3)
+                        ob.build.attrs.push_back(numberText(at[0]) + " " + numberText(at[1]) + " " + numberText(at[2]));
+                ob.build.parts = strings(g.value("parts", json::array()));
+                ob.build.categories = strings(g.value("cats", json::array()));
+            }
+            q.objectives.push_back(std::move(ob));
+        }
+        const json rw = t.value("rw", json::object());
+        for (const auto &r : rw.value("rep", json::array()))
+            if (r.is_array() && r.size() == 2 && r[0].is_string())
+                q.rewards.rep.push_back({r[0].get<std::string>(), r[1].get<float>()});
+        q.rewards.items = itemCounts(rw.value("it", json::array()));
+        for (const auto &u : rw.value("un", json::array()))
+            if (u.is_array() && u.size() == 3 && u[0].is_string())
+                q.rewards.unlocks.push_back({u[0].get<std::string>(), numberText(u[1]), u[2].is_number() ? u[2].get<int>() : 1});
+        for (const auto &s : rw.value("sk", json::array()))
+            if (s.is_array() && s.size() == 2)
+                q.rewards.skills.push_back({numberText(s[0]), s[1].is_number() ? s[1].get<int>() : 0});
+        q.rewards.traders = strings(rw.value("tu", json::array()));
+        q.startItems = itemCounts(t.value("st", json::array()));
+        // Quests come sorted in the game's trader order; keep it for the filter.
+        if (std::find(d.traders.begin(), d.traders.end(), q.trader) == d.traders.end())
+            d.traders.push_back(q.trader);
+        d.quests.push_back(std::move(q));
+    }
+    if (d.quests.empty() && d.items.empty()) {
+        err = "database is empty";
+        return false;
+    }
+    out = std::move(d);
+    return true;
+}
+
+bool parseWiki(const std::string &text, std::map<std::string, std::string> &out) {
+    json j = json::parse(text, nullptr, false);
+    if (j.is_discarded() || !j.is_object())
+        return false;
+    out.clear();
+    const json pages = j.value("pages", json::object());
+    for (auto &[k, v] : pages.items())
+        if (v.is_string())
+            out[k] = v.get<std::string>();
+    return true;
+}
+
 bool loadState(const std::string &path, State &st) {
     std::ifstream f(path);
     if (!f)
@@ -173,6 +340,10 @@ bool loadState(const std::string &path, State &st) {
     for (auto &[k, v] : parts.items())
         if (v.is_number())
             st.parts[k] = v.get<int>();
+    st.tasksDone.clear();
+    for (const auto &t : j.value("tasksDone", json::array()))
+        if (t.is_string())
+            st.tasksDone.insert(t.get<std::string>());
     for (const auto &t : j.value("timers", json::array())) {
         Timer tm;
         tm.craftId = str(t, "craft");
@@ -205,6 +376,7 @@ bool saveState(const std::string &path, const State &st) {
     for (const auto &t : st.timers)
         timers.push_back({{"craft", t.craftId}, {"end", t.endTime}});
     j["timers"] = timers;
+    j["tasksDone"] = st.tasksDone;
 
     std::string tmp = path + ".tmp";
     {
@@ -252,6 +424,10 @@ bool applyTrackerProgress(const std::string &text, const HideoutData &data, Stat
         if (count > 0)
             st.parts[id] = count;
     }
+    st.tasksDone.clear();
+    for (const auto &t : d.value("tasksProgress", json::array()))
+        if (t.value("complete", false))
+            st.tasksDone.insert(str(t, "id"));
     st.account = str(d, "displayName");
     return true;
 }

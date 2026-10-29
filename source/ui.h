@@ -6,6 +6,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace col {
 constexpr SDL_Color bg{14, 15, 13, 255};
@@ -45,10 +46,10 @@ public:
     int hintsWidth(const std::string &button, const std::string &label);
     void clip(const SDL_Rect *r);
 
-    // Images. The icon atlas is a grid of 64 px cells, ATLAS_COLS wide.
+    // Images. Icon atlases are pages of 32 x 32 cells of 64 px; index / 1024 is the page.
     SDL_Texture *loadImage(const std::string &path, int *w = nullptr, int *h = nullptr);
-    void setIcons(SDL_Texture *atlas);
-    bool hasIcons() const { return icons != nullptr; }
+    void setIcons(const std::vector<SDL_Texture *> &pages);
+    bool hasIcons() const { return !icons.empty(); }
     // Draws an item icon in a square cell; idx < 0 draws an empty cell.
     void icon(int idx, int x, int y, int size);
     void image(SDL_Texture *tex, const SDL_Rect *src, const SDL_FRect *dst);
@@ -58,6 +59,8 @@ public:
     int textRight(int right, int y, const std::string &s, FontSize fs, SDL_Color c);
     int measure(const std::string &s, FontSize fs);
     int lineHeight(FontSize fs) const { return lineH[fs]; }
+    // Splits text into lines no wider than w, keeping explicit line breaks.
+    std::vector<std::string> wrap(const std::string &s, FontSize fs, int w);
 
     // Drops cached textures not used for a while.
     void endFrame();
@@ -71,7 +74,7 @@ private:
     Cached *get(const std::string &s, FontSize fs, SDL_Color c);
     std::string fit(const std::string &s, FontSize fs, int maxW);
 
-    SDL_Texture *icons = nullptr;
+    std::vector<SDL_Texture *> icons;
     SDL_Window *window = nullptr;
     SDL_Renderer *renderer = nullptr;
     TTF_Font *fonts[FS_COUNT] = {};

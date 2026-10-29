@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -59,6 +60,97 @@ struct HideoutData {
     bool empty() const { return stations.empty(); }
 };
 
+// ---- Database tab (db-<mode>.json)
+
+struct Pin {
+    std::string map;  // map id as in maps-<mode>.json (normalized name)
+    float u, v;
+};
+
+struct DbItem {
+    std::string name, shortName, category, desc;
+    int price = 0;            // flea average, 0 if unknown
+    std::string trader;       // best trader to sell to
+    int traderPrice = 0;
+    float weight = 0;
+    bool noFlea = false, questItem = false;
+    int icon = -1;
+};
+
+struct Ammo {
+    std::string item, caliber;
+    int damage = 0, pen = 0, armorDamage = 0, frag = 0, speed = 0, projectiles = 1;
+    bool tracer = false;
+};
+
+struct KeyInfo {
+    std::string item;
+    int uses = 0;
+    std::vector<std::string> quests;
+    std::vector<Pin> pins;
+};
+
+struct BuildSpec {
+    std::string weapon;
+    std::vector<std::string> attrs;  // "Ergonomics >= 37"
+    std::vector<std::string> parts;  // item ids
+    std::vector<std::string> categories;
+};
+
+struct Objective {
+    std::string desc, type;
+    int count = 0, more = 0;
+    bool optional = false, fir = false;
+    std::vector<std::string> items;
+    std::vector<Pin> pins;
+    bool hasBuild = false;
+    BuildSpec build;
+};
+
+struct ItemCount {
+    std::string item;
+    int count = 1;
+};
+
+struct Unlock {
+    std::string item, trader;
+    int level = 1;
+};
+
+struct Rewards {
+    std::vector<std::pair<std::string, float>> rep;
+    std::vector<ItemCount> items;
+    std::vector<Unlock> unlocks;
+    std::vector<std::pair<std::string, int>> skills;
+    std::vector<std::string> traders;
+};
+
+struct Quest {
+    std::string id, name, trader, map, faction, wiki;
+    int level = 0, exp = 0;
+    bool kappa = false, lightkeeper = false;
+    std::vector<std::string> prereqs, traderReqs, keys;
+    std::vector<Objective> objectives;
+    Rewards rewards;
+    std::vector<ItemCount> startItems;
+};
+
+struct Database {
+    std::map<std::string, DbItem> items;
+    std::vector<Ammo> ammo;
+    std::vector<KeyInfo> keys;
+    std::vector<Quest> quests;
+    std::vector<std::string> calibers;
+    std::vector<std::string> traders;
+
+    const DbItem *item(const std::string &id) const;
+    bool empty() const { return quests.empty() && items.empty(); }
+};
+
+bool parseDatabase(const std::string &text, Database &out, std::string &err);
+// wiki.json: {"pages": {title: text}}
+bool parseWiki(const std::string &text, std::map<std::string, std::string> &out);
+
 struct Timer {
     std::string craftId;
     int64_t endTime = 0;
@@ -71,6 +163,7 @@ struct State {
     std::map<std::string, bool> modules;
     std::map<std::string, int> parts;
     std::vector<Timer> timers;
+    std::set<std::string> tasksDone;  // from TarkovTracker
     std::string lastSync;
     std::string account;
     std::string profileId;  // tarkov.dev account id

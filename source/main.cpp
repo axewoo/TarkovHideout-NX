@@ -24,8 +24,12 @@
 #define TRACKER_API "https://api.tarkovtracker.org"
 #define PROFILE_API "https://players.tarkov.dev/"
 
-enum Tab { TAB_STATIONS, TAB_ITEMS, TAB_CRAFTS, TAB_TIMERS, TAB_MAPS, TAB_PROFILE, TAB_SETTINGS, TAB_COUNT };
-static const char *kTabNames[TAB_COUNT] = {"Stations", "Needed items", "Crafts", "Timers", "Maps", "Profile", "Settings"};
+enum Tab { TAB_STATIONS, TAB_ITEMS, TAB_CRAFTS, TAB_TIMERS, TAB_MAPS, TAB_DATABASE, TAB_PROFILE, TAB_SETTINGS, TAB_COUNT };
+static const char *kTabNames[TAB_COUNT] = {"Stations", "Needed", "Crafts", "Timers", "Maps", "Database", "Profile", "Settings"};
+
+enum DbSection { DB_QUESTS, DB_AMMO, DB_KEYS, DB_ITEMS, DB_COUNT };
+static const char *kDbNames[DB_COUNT] = {"Quests", "Ammo", "Keys", "Items"};
+static const int kMaxIconPages = 8;
 
 static const int kTop = 116;
 static const int kBottom = 664;
@@ -223,6 +227,8 @@ private:
     void inputCrafts();
     void inputTimers();
     void inputMaps();
+    void inputDatabase();
+    void inputQuest();
     void inputProfile();
     void inputSettings();
 
@@ -235,6 +241,14 @@ private:
     void drawCrafts();
     void drawTimers();
     void drawMaps();
+    void drawDatabase();
+    void drawDbHeader();
+    void drawQuestList();
+    void drawAmmo();
+    void drawKeys();
+    void drawDbItems();
+    void drawItemDetail(const std::string &id, int x, int y, int w);
+    void drawQuest();
     void drawProfile();
     void drawSettings();
     void drawScrollbar(int x, int y, int h, int count, int visible, int scroll);
@@ -245,6 +259,17 @@ private:
     const Craft *craftById(const std::string &id) const;
     Timer *timerFor(const std::string &craftId);
     std::string craftTitle(const Craft &c) const;
+
+    // Database
+    void ensureDb();
+    void ensureWiki();
+    void filterDb();
+    void openQuestPage(int idx);
+    void buildQuestRows(const Quest &q);
+    void showPins(const std::string &label, const std::vector<Pin> &pins);
+    std::string itemName(const std::string &id) const;
+    int itemIcon(const std::string &id) const;
+    std::vector<std::string> usedFor(const std::string &id) const;
 
     // Maps
     const MapInfo *currentMap() const { return maps.empty() ? nullptr : &maps[mapSel % maps.size()]; }
@@ -289,6 +314,43 @@ private:
 
     Profile profile;
     int skillScroll = 0;
+
+    std::string dataRoot;
+    Database db;
+    bool dbLoaded = false;
+    std::map<std::string, std::string> wiki;
+    bool wikiLoaded = false;
+    int dbSection = DB_QUESTS;
+    std::string dbSearch;
+    int dbFilter = 0;  // trader or caliber index + 1, 0 = all
+    bool dbDirty = true;
+    std::vector<int> dbRows;                 // indices into quests, ammo or keys
+    std::vector<std::string> dbItemRows;     // item ids for the Items section
+    std::vector<std::string> itemsByName;
+    ListView dbList;
+    std::string usedForId;
+    std::vector<std::string> usedForCache;
+
+    struct QRow {
+        enum Kind { HEAD, TEXT, OBJ, ITEM } kind;
+        int h = 0;
+        std::string text;
+        SDL_Color color = col::text;
+        int obj = -1;          // objective index for OBJ
+        std::string item;      // item id for ITEM
+        int count = 0;
+        std::vector<std::string> lines;
+    };
+    int openQuest = -1;
+    std::vector<std::string> questText;
+    int textScroll = 0;
+    std::vector<QRow> qrows;
+    int qrowSel = -1;
+    int qrowScroll = 0;
+
+    std::string pinLabel;
+    std::vector<Pin> pins;
+    bool pinReturn = false;
 
     std::string status;
     SDL_Color statusColor = col::dim;
@@ -351,9 +413,15 @@ void App::busy(const std::string &s) {
 }
 
 void App::loadIcons(const std::string &root) {
-    // icons.png indices belong to the hideout file next to it.
-    SDL_Texture *t = ui.loadImage(root + "icons.png");
-    ui.setIcons(t);
+    // Icon indices belong to the data files next to the atlas pages.
+    std::vector<SDL_Texture *> pages;
+    for (int i = 0; i < kMaxIconPages; i++) {
+        SDL_Texture *t = ui.loadImage(root + "icons-" + std::to_string(i) + ".jpg");
+        if (!t)
+            break;
+        pages.push_back(t);
+    }
+    ui.setIcons(pages);
 }
 
 void App::loadData() {
@@ -370,7 +438,7 @@ void App::loadData() {
         if (!parseHideout(text, d, err))
             continue;
         // Data from before icons existed loses to any copy that has them.
-        bool icons = fileExists(root + "icons.png") && !d.icons.empty();
+        bool icons = fileExists(root + "icons-0.jpg") && !d.icons.empty();
         if (best.empty() || icons > bestIcons || (icons == bestIcons && d.generated > best.generated)) {
             bestIcons = icons;
             best = std::move(d);
@@ -378,8 +446,12 @@ void App::loadData() {
         }
     }
     data = std::move(best);
+    dataRoot = bestRoot;
     if (!bestRoot.empty())
         loadIcons(bestRoot);
+    db = Database();
+    dbLoaded = false;
+    openQuest = -1;
     needDirty = true;
     viewLevel = -1;
     loadMaps();
@@ -418,13 +490,22 @@ bool App::downloadData(bool quiet) {
         return false;
     }
     busy("Downloading item icons and maps...");
-    HttpResult icons = httpGet(DATA_URL "icons.png");
-    HttpResult mapsJson = httpGet(DATA_URL + std::string("maps-") + modeName() + ".json");
+    for (int i = 0; i < kMaxIconPages; i++) {
+        std::string page = "icons-" + std::to_string(i) + ".jpg";
+        HttpResult icons = httpGet(DATA_URL + page);
+        if (!icons.ok || icons.status != 200)
+            break;
+        writeFile(std::string(APP_DIR "/") + page, icons.body);
+    }
+    busy("Downloading the quest and item database...");
+    for (const std::string &file : {std::string("maps-") + modeName() + ".json", std::string("db-") + modeName() + ".json",
+                                    std::string("wiki.json")}) {
+        HttpResult f = httpGet(DATA_URL + file);
+        if (f.ok && f.status == 200)
+            writeFile(std::string(APP_DIR "/") + file, f.body);
+    }
     writeFile(std::string(APP_DIR "/") + name, r.body);
-    if (icons.ok && icons.status == 200)
-        writeFile(APP_DIR "/icons.png", icons.body);
-    if (mapsJson.ok && mapsJson.status == 200)
-        writeFile(std::string(APP_DIR "/maps-") + modeName() + ".json", mapsJson.body);
+    wikiLoaded = false;
     loadData();
     setStatus("Hideout data updated (" + data.generated + ")", col::good);
     return true;
@@ -674,6 +755,7 @@ void App::input() {
     case TAB_CRAFTS: inputCrafts(); break;
     case TAB_TIMERS: inputTimers(); break;
     case TAB_MAPS: inputMaps(); break;
+    case TAB_DATABASE: inputDatabase(); break;
     case TAB_PROFILE: inputProfile(); break;
     case TAB_SETTINGS: inputSettings(); break;
     default: break;
@@ -950,6 +1032,13 @@ void App::inputMaps() {
     }
     if (in.pressed(HidNpadButton_Y))
         mapLabels = !mapLabels;
+    if (in.pressed(HidNpadButton_B) && pinReturn) {
+        // Came from a quest or key page: go back to it.
+        pinReturn = false;
+        pins.clear();
+        tab = TAB_DATABASE;
+        return;
+    }
     if (in.pressed(HidNpadButton_B)) {
         mapZoom = 1;
         mapU = mapV = 0.5f;
@@ -1039,6 +1128,384 @@ void App::inputSettings() {
             setStatus("Local progress cleared");
         }
         break;
+    }
+}
+
+
+// ---------------------------------------------------------------- database
+
+void App::ensureDb() {
+    if (dbLoaded)
+        return;
+    dbLoaded = true;
+    std::string name = "db-" + modeName() + ".json";
+    std::string err;
+    std::vector<std::string> roots = {dataRoot, std::string(APP_DIR "/"), std::string("romfs:/")};
+    for (const auto &root : roots) {
+        if (root.empty())
+            continue;
+        std::string text = readFile(root + name);
+        if (!text.empty() && parseDatabase(text, db, err))
+            break;
+    }
+    itemsByName.clear();
+    for (const auto &[id, it] : db.items)
+        itemsByName.push_back(id);
+    std::sort(itemsByName.begin(), itemsByName.end(),
+              [this](const std::string &a, const std::string &b) { return db.items.at(a).name < db.items.at(b).name; });
+    dbDirty = true;
+}
+
+void App::ensureWiki() {
+    if (wikiLoaded)
+        return;
+    wikiLoaded = true;
+    for (const std::string &root : {std::string(APP_DIR "/"), std::string("romfs:/")})
+        if (parseWiki(readFile(root + "wiki.json"), wiki) && !wiki.empty())
+            break;
+}
+
+std::string App::itemName(const std::string &id) const {
+    const DbItem *it = db.item(id);
+    return it ? it->name : id;
+}
+
+int App::itemIcon(const std::string &id) const {
+    const DbItem *it = db.item(id);
+    if (it && it->icon >= 0)
+        return it->icon;
+    return data.icon(id);
+}
+
+static std::string lower(std::string s) {
+    for (auto &c : s)
+        c = std::tolower((unsigned char)c);
+    return s;
+}
+
+static bool matches(const std::string &hay, const std::string &needle) {
+    return needle.empty() || lower(hay).find(needle) != std::string::npos;
+}
+
+void App::filterDb() {
+    dbDirty = false;
+    dbRows.clear();
+    dbItemRows.clear();
+    std::string q = lower(dbSearch);
+    switch (dbSection) {
+    case DB_QUESTS:
+        for (int i = 0; i < (int)db.quests.size(); i++) {
+            const Quest &qu = db.quests[i];
+            if (dbFilter > 0 && qu.trader != db.traders[dbFilter - 1])
+                continue;
+            if (matches(qu.name, q) || matches(qu.map, q))
+                dbRows.push_back(i);
+        }
+        break;
+    case DB_AMMO:
+        for (int i = 0; i < (int)db.ammo.size(); i++) {
+            const Ammo &a = db.ammo[i];
+            if (dbFilter > 0 && a.caliber != db.calibers[dbFilter - 1])
+                continue;
+            if (matches(itemName(a.item), q) || matches(a.caliber, q))
+                dbRows.push_back(i);
+        }
+        break;
+    case DB_KEYS:
+        for (int i = 0; i < (int)db.keys.size(); i++)
+            if (matches(itemName(db.keys[i].item), q))
+                dbRows.push_back(i);
+        break;
+    case DB_ITEMS:
+        for (const auto &id : itemsByName) {
+            const DbItem &it = db.items.at(id);
+            if (matches(it.name, q) || matches(it.shortName, q))
+                dbItemRows.push_back(id);
+        }
+        break;
+    }
+}
+
+int filterCount(int section, const Database &db) {
+    return section == DB_QUESTS ? db.traders.size() : (section == DB_AMMO ? db.calibers.size() : 0);
+}
+
+void App::showPins(const std::string &label, const std::vector<Pin> &list) {
+    if (list.empty())
+        return;
+    int idx = -1;
+    for (const Pin &p : list) {
+        for (int i = 0; i < (int)maps.size() && idx < 0; i++)
+            if (maps[i].id == p.map)
+                idx = i;
+        if (idx >= 0)
+            break;
+    }
+    if (idx < 0) {
+        setStatus("That map is not in the map data yet", col::warn);
+        return;
+    }
+    pins = list;
+    pinLabel = label;
+    pinReturn = true;
+    mapSel = idx;
+    markerSel = -1;
+    // Center on the pins of this map and zoom so they all stay in view.
+    float u0 = 1, v0 = 1, u1 = 0, v1 = 0;
+    for (const Pin &p : list)
+        if (p.map == maps[idx].id) {
+            u0 = std::min(u0, p.u);
+            v0 = std::min(v0, p.v);
+            u1 = std::max(u1, p.u);
+            v1 = std::max(v1, p.v);
+        }
+    mapU = (u0 + u1) / 2;
+    mapV = (v0 + v1) / 2;
+    float span = std::max(u1 - u0, v1 - v0);
+    mapZoom = std::clamp(0.6f / std::max(span, 0.12f), 1.f, 4.f);
+    tab = TAB_MAPS;
+}
+
+// Hideout levels, crafts and quests that use an item.
+std::vector<std::string> App::usedFor(const std::string &id) const {
+    std::vector<std::string> out;
+    for (const auto &s : data.stations)
+        for (const auto &l : s.levels)
+            for (const auto &r : l.items)
+                if (r.itemId == id)
+                    out.push_back("Hideout: " + s.name + " " + std::to_string(l.level) + "  x" + groupDigits(r.count) +
+                                  (r.fir ? " (FIR)" : ""));
+    for (const auto &q : db.quests)
+        for (const auto &o : q.objectives)
+            if (std::find(o.items.begin(), o.items.end(), id) != o.items.end() ||
+                std::find(o.build.parts.begin(), o.build.parts.end(), id) != o.build.parts.end()) {
+                out.push_back("Quest: " + q.name + " (" + q.trader + ")");
+                break;
+            }
+    for (const auto &q : db.quests)
+        if (std::find(q.keys.begin(), q.keys.end(), id) != q.keys.end())
+            out.push_back("Key for: " + q.name);
+    for (const auto &c : data.crafts) {
+        const Station *s = data.station(c.stationId);
+        for (const auto &r : c.req)
+            if (r.itemId == id) {
+                out.push_back("Craft input: " + craftTitle(c) + " (" + (s ? s->name : "") + ")");
+                break;
+            }
+        for (const auto &r : c.rew)
+            if (r.itemId == id) {
+                out.push_back("Crafted at " + (s ? s->name : std::string("hideout")) + " " + std::to_string(c.level));
+                break;
+            }
+    }
+    return out;
+}
+
+void App::inputDatabase() {
+    ensureDb();
+    if (openQuest >= 0) {
+        inputQuest();
+        return;
+    }
+    if (in.pressed(HidNpadButton_ZL) || in.pressed(HidNpadButton_ZR)) {
+        int d = in.pressed(HidNpadButton_ZR) ? 1 : -1;
+        dbSection = (dbSection + d + DB_COUNT) % DB_COUNT;
+        dbFilter = 0;
+        dbList = ListView();
+        dbDirty = true;
+        return;
+    }
+    if (in.pressed(HidNpadButton_Y)) {
+        std::string q;
+        if (keyboard("Search", "Part of a name", dbSearch, false, q)) {
+            dbSearch = q;
+            dbList = ListView();
+            dbDirty = true;
+        }
+    }
+    if (in.pressed(HidNpadButton_X) && !dbSearch.empty()) {
+        dbSearch.clear();
+        dbList = ListView();
+        dbDirty = true;
+    }
+    int nf = filterCount(dbSection, db);
+    if (nf > 0 && (in.left() || in.right())) {
+        int d = in.right() ? 1 : -1;
+        dbFilter = (dbFilter + d + nf + 1) % (nf + 1);
+        dbList = ListView();
+        dbDirty = true;
+        return;
+    }
+    if (dbDirty)
+        filterDb();
+    int n = dbSection == DB_ITEMS ? dbItemRows.size() : dbRows.size();
+    if (in.up())
+        dbList.move(-1, n);
+    if (in.downDir())
+        dbList.move(1, n);
+    if (dbSection == DB_ITEMS || dbSection == DB_KEYS) {
+        // No filter on these, so Left/Right page through the list.
+        if (in.left())
+            dbList.move(-10, n);
+        if (in.right())
+            dbList.move(10, n);
+    }
+    dbList.clampSel(n);
+    if (n == 0 || !in.pressed(HidNpadButton_A))
+        return;
+    if (dbSection == DB_QUESTS)
+        openQuestPage(dbRows[dbList.sel]);
+    else if (dbSection == DB_KEYS) {
+        const KeyInfo &k = db.keys[dbRows[dbList.sel]];
+        if (k.pins.empty())
+            setStatus("No lock position known for this key", col::warn);
+        else
+            showPins(itemName(k.item), k.pins);
+    }
+}
+
+void App::openQuestPage(int idx) {
+    ensureWiki();
+    openQuest = idx;
+    const Quest &q = db.quests[idx];
+    auto it = wiki.find(q.wiki);
+    std::string text = it != wiki.end() ? it->second : "";
+    questText = text.empty() ? std::vector<std::string>{"No wiki guide cached for this quest.",
+                                                          "Download the latest data in Settings to get the guides."}
+                             : ui.wrap(text, FS_SMALL, 560);
+    textScroll = 0;
+    buildQuestRows(q);
+    qrowSel = -1;
+    for (int i = 0; i < (int)qrows.size(); i++)
+        if (qrows[i].kind == QRow::OBJ) {
+            qrowSel = i;
+            break;
+        }
+    qrowScroll = 0;
+}
+
+void App::buildQuestRows(const Quest &q) {
+    qrows.clear();
+    const int w = 540;
+    auto head = [&](const std::string &t) {
+        QRow r{QRow::HEAD};
+        r.text = t;
+        r.h = 40;
+        qrows.push_back(r);
+    };
+    auto text = [&](const std::string &t, SDL_Color c) {
+        QRow r{QRow::TEXT};
+        r.lines = ui.wrap(t, FS_SMALL, w);
+        r.color = c;
+        r.h = r.lines.size() * 26 + 4;
+        qrows.push_back(r);
+    };
+    auto item = [&](const std::string &id, int count, const std::string &suffix = "") {
+        QRow r{QRow::ITEM};
+        r.item = id;
+        r.count = count;
+        r.text = suffix;
+        r.h = 40;
+        qrows.push_back(r);
+    };
+
+    if (!q.prereqs.empty() || !q.traderReqs.empty() || q.level > 1) {
+        head("Requirements");
+        if (q.level > 1)
+            text("Level " + std::to_string(q.level), col::text);
+        for (const auto &t : q.traderReqs)
+            text(t, col::text);
+        for (const auto &p : q.prereqs)
+            text("Complete " + p, col::dim);
+    }
+    if (!q.keys.empty() || !q.startItems.empty()) {
+        head("Bring / you get");
+        for (const auto &k : q.keys)
+            item(k, 1, "key");
+        for (const auto &s : q.startItems)
+            item(s.item, s.count, "given at start");
+    }
+    head("Objectives");
+    for (int i = 0; i < (int)q.objectives.size(); i++) {
+        const Objective &o = q.objectives[i];
+        QRow r{QRow::OBJ};
+        r.obj = i;
+        r.lines = ui.wrap(o.desc, FS_SMALL, w - 40);
+        int h = r.lines.size() * 26 + 12;
+        if (!o.items.empty())
+            h += 44;
+        if (o.hasBuild)
+            h += 26 * (o.build.attrs.size() + (o.build.categories.empty() ? 0 : 1)) + (o.build.parts.empty() ? 0 : 44) + 8;
+        r.h = h;
+        qrows.push_back(r);
+    }
+    const Rewards &rw = q.rewards;
+    head("Rewards");
+    if (q.exp)
+        text("+" + groupDigits(q.exp) + " EXP", col::good);
+    for (const auto &rp : rw.rep) {
+        char buf[64];
+        snprintf(buf, sizeof buf, "%s rep %+.2f", rp.first.c_str(), rp.second);
+        text(buf, rp.second >= 0 ? col::good : col::bad);
+    }
+    for (const auto &it : rw.items)
+        item(it.item, it.count);
+    for (const auto &sk : rw.skills)
+        text(sk.first + " +" + std::to_string(sk.second) + " levels", col::text);
+    for (const auto &t : rw.traders)
+        text("Unlocks trader " + t, col::accent);
+    for (const auto &u : rw.unlocks)
+        item(u.item, 0, "unlocked at " + u.trader + " LL" + std::to_string(u.level));
+}
+
+void App::inputQuest() {
+    const Quest &q = db.quests[openQuest];
+    if (in.pressed(HidNpadButton_B)) {
+        openQuest = -1;
+        return;
+    }
+    // Right stick or ZL/ZR scrolls the wiki text.
+    int visible = (kBottom - kTop - 110) / 26;
+    int maxScroll = std::max(0, (int)questText.size() - visible);
+    static float acc = 0;
+    acc += -in.ry * 0.6f;
+    if (in.pressed(HidNpadButton_ZR))
+        acc += visible - 2;
+    if (in.pressed(HidNpadButton_ZL))
+        acc -= visible - 2;
+    int step = (int)acc;
+    acc -= step;
+    textScroll = std::clamp(textScroll + step, 0, maxScroll);
+
+    std::vector<int> sel;
+    for (int i = 0; i < (int)qrows.size(); i++)
+        if (qrows[i].kind == QRow::OBJ || qrows[i].kind == QRow::ITEM)
+            sel.push_back(i);
+    if (!sel.empty() && (in.up() || in.downDir())) {
+        int pos = std::find(sel.begin(), sel.end(), qrowSel) - sel.begin();
+        if (pos >= (int)sel.size())
+            pos = 0;
+        else
+            pos = std::clamp(pos + (in.downDir() ? 1 : -1), 0, (int)sel.size() - 1);
+        qrowSel = sel[pos];
+    }
+    if (in.pressed(HidNpadButton_A) && qrowSel >= 0 && qrowSel < (int)qrows.size()) {
+        const QRow &r = qrows[qrowSel];
+        if (r.kind == QRow::OBJ) {
+            const Objective &o = q.objectives[r.obj];
+            if (!o.pins.empty())
+                showPins(q.name, o.pins);
+            else
+                setStatus("No map position for this objective", col::dim);
+        } else if (r.kind == QRow::ITEM) {
+            // Jump to the item in the Items section.
+            dbSection = DB_ITEMS;
+            dbSearch = itemName(r.item);
+            dbFilter = 0;
+            dbList = ListView();
+            dbDirty = true;
+            openQuest = -1;
+        }
     }
 }
 
@@ -1389,6 +1856,22 @@ void App::drawMaps() {
         }
     }
 
+    // Quest or key pins on top of everything.
+    int shownPins = 0;
+    for (const Pin &p : pins) {
+        if (p.map != m->id)
+            continue;
+        float x = ox + p.u * dw, y = oy + p.v * dh;
+        ui.disc(x, y, 15, col::shadow);
+        ui.disc(x, y, 12, col::text);
+        ui.disc(x, y, 7, col::warn);
+        if (shownPins++ == 0 && !pinLabel.empty()) {
+            int tw = ui.measure(pinLabel, FS_BODY);
+            ui.fill(int(x) + 18, int(y) - 16, tw + 12, 32, col::shadow);
+            ui.text(int(x) + 24, int(y) - 14, pinLabel, FS_BODY, col::text);
+        }
+    }
+
     // Title card and legend.
     ui.fill(16, kMapTop + 12, 360, 70, SDL_Color{14, 15, 13, 215});
     ui.fill(16, kMapTop + 12, 4, 70, col::accent);
@@ -1414,7 +1897,424 @@ void App::drawMaps() {
     }
     ui.clip(nullptr);
 
-    drawFooter({{"ZL/ZR", "Map"}, {"</>", "Marker"}, {"^/v", "Filter"}, {"A/X", "Zoom"}, {"Y", "Labels"}});
+    if (pinReturn)
+        drawFooter({{"B", "Back"}, {"ZL/ZR", "Map"}, {"A/X", "Zoom"}, {"Y", "Labels"}});
+    else
+        drawFooter({{"ZL/ZR", "Map"}, {"</>", "Marker"}, {"^/v", "Filter"}, {"A/X", "Zoom"}, {"Y", "Labels"}});
+}
+
+
+static SDL_Color penColor(int pen) {
+    if (pen >= 60)
+        return col::good;
+    if (pen >= 50)
+        return SDL_Color{160, 196, 96, 255};
+    if (pen >= 40)
+        return col::accent;
+    if (pen >= 30)
+        return col::warn;
+    if (pen >= 20)
+        return SDL_Color{214, 120, 72, 255};
+    return col::bad;
+}
+
+void App::drawDbHeader() {
+    int x = 24;
+    for (int i = 0; i < DB_COUNT; i++) {
+        bool on = i == dbSection;
+        int w = ui.measure(kDbNames[i], FS_BODY) + 28;
+        ui.fill(x, kTop - 8, w, 36, on ? col::accent : col::panel);
+        ui.text(x + 14, kTop - 6, kDbNames[i], FS_BODY, on ? col::bg : col::dim);
+        x += w + 6;
+    }
+    ui.hint(x + 6, kTop - 3, "ZL/ZR", "");
+    x += 90;
+    int nf = filterCount(dbSection, db);
+    if (nf > 0) {
+        std::string f = dbFilter == 0 ? (dbSection == DB_QUESTS ? "All traders" : "All calibers")
+                                       : (dbSection == DB_QUESTS ? db.traders : db.calibers)[dbFilter - 1];
+        ui.text(x, kTop - 4, "<  " + f + "  >", FS_BODY, col::accent, 300);
+    }
+    if (!dbSearch.empty())
+        drawBadge(1256 - ui.measure("Search: " + dbSearch, FS_SMALL) - 14, kTop - 2, "Search: " + dbSearch, col::info);
+}
+
+void App::drawQuestList() {
+    const int rowH = 58, top = kTop + 40;
+    int visible = (kBottom - top) / rowH;
+    dbList.clamp(dbRows.size(), visible);
+    if (dbRows.empty())
+        ui.text(28, top + 10, "No quests match.", FS_BODY, col::dim);
+    for (int i = 0; i < visible && dbList.scroll + i < (int)dbRows.size(); i++) {
+        int idx = dbList.scroll + i;
+        const Quest &q = db.quests[dbRows[idx]];
+        int y = top + i * rowH;
+        bool on = idx == dbList.sel;
+        bool done = st.tasksDone.count(q.id) > 0;
+        ui.fill(16, y, 1240, rowH - 6, on ? col::panelHi : col::panel);
+        if (on)
+            ui.fill(16, y, 4, rowH - 6, col::accent);
+        ui.text(32, y + 2, q.name, FS_BODY, done ? col::dim : col::text, 640);
+        std::string sub = q.trader + (q.level > 1 ? "   Level " + std::to_string(q.level) : "") +
+                          (q.map.empty() ? "" : "   " + q.map);
+        ui.text(32, y + 28, sub, FS_SMALL, col::dim, 640);
+        int bx = 1240;
+        auto badge = [&](const std::string &t, SDL_Color c) {
+            int w = ui.measure(t, FS_SMALL) + 14;
+            bx -= w + 8;
+            drawBadge(bx, y + 14, t, c);
+        };
+        if (done)
+            badge("DONE", col::good);
+        if (q.kappa)
+            badge("Kappa", col::accent);
+        if (q.lightkeeper)
+            badge("Lightkeeper", col::violet);
+        bool pinned = false;
+        for (const auto &o : q.objectives)
+            pinned |= !o.pins.empty();
+        if (pinned)
+            badge("Map", col::warn);
+    }
+    drawScrollbar(1262, top, visible * rowH, dbRows.size(), visible, dbList.scroll);
+    drawFooter({{"A", "Open"}, {"Y", "Search"}, {"</>", "Trader"}, {"ZL/ZR", "Section"}});
+}
+
+void App::drawAmmo() {
+    const int rowH = 46, top = kTop + 76;
+    static const char *cols[] = {"Damage", "Pen", "Armor dmg", "Frag", "Speed", "Flea"};
+    static const int colX[] = {640, 740, 860, 960, 1060, 1240};
+    ui.fill(16, kTop + 38, 1248, 34, col::panel);
+    ui.text(84, kTop + 42, "Round", FS_SMALL, col::dim);
+    for (int c = 0; c < 6; c++)
+        ui.textRight(colX[c], kTop + 42, cols[c], FS_SMALL, col::dim);
+    int visible = (kBottom - top) / rowH;
+    dbList.clamp(dbRows.size(), visible);
+    std::string lastCal;
+    for (int i = 0; i < visible && dbList.scroll + i < (int)dbRows.size(); i++) {
+        int idx = dbList.scroll + i;
+        const Ammo &a = db.ammo[dbRows[idx]];
+        int y = top + i * rowH;
+        bool on = idx == dbList.sel;
+        if (on)
+            ui.fill(16, y, 1248, rowH - 4, col::panelHi);
+        ui.icon(itemIcon(a.item), 28, y + 2, 38);
+        std::string name = itemName(a.item);
+        int w = ui.text(84, y + 8, name, FS_SMALL, col::text, 400);
+        ui.text(84 + w + 10, y + 8, a.caliber, FS_SMALL, col::faint, 120);
+        std::string dmg = a.projectiles > 1 ? std::to_string(a.projectiles) + "x" + std::to_string(a.damage)
+                                            : std::to_string(a.damage);
+        ui.textRight(colX[0], y + 8, dmg, FS_SMALL, col::text);
+        ui.fill(colX[1] - 52, y + 6, 54, 28, SDL_Color{penColor(a.pen).r, penColor(a.pen).g, penColor(a.pen).b, 60});
+        ui.textRight(colX[1], y + 8, std::to_string(a.pen), FS_SMALL, penColor(a.pen));
+        ui.textRight(colX[2], y + 8, std::to_string(a.armorDamage), FS_SMALL, col::text);
+        ui.textRight(colX[3], y + 8, std::to_string(a.frag) + "%", FS_SMALL, col::text);
+        ui.textRight(colX[4], y + 8, std::to_string(a.speed), FS_SMALL, col::dim);
+        const DbItem *it = db.item(a.item);
+        std::string price = it && it->price ? groupDigits(it->price) : (it && it->noFlea ? "no flea" : "-");
+        ui.textRight(colX[5], y + 8, price, FS_SMALL, col::accent);
+    }
+    drawScrollbar(1266, top, visible * rowH, dbRows.size(), visible, dbList.scroll);
+    drawFooter({{"</>", "Caliber"}, {"Y", "Search"}, {"ZL/ZR", "Section"}});
+}
+
+void App::drawItemDetail(const std::string &id, int x, int y, int w) {
+    const DbItem *it = db.item(id);
+    if (!it)
+        return;
+    ui.fill(x, y, w, kBottom - y, col::panel);
+    ui.icon(itemIcon(id), x + 16, y + 16, 96);
+    ui.text(x + 128, y + 14, it->name, FS_BODY, col::text, w - 144);
+    ui.text(x + 128, y + 46, it->category, FS_SMALL, col::dim, w - 144);
+    int yy = y + 76;
+    if (it->price)
+        ui.text(x + 128, yy, "Flea  " + groupDigits(it->price) + " RUB", FS_SMALL, col::accent);
+    else if (it->noFlea)
+        ui.text(x + 128, yy, "Can't be sold on the flea market", FS_SMALL, col::warn);
+    yy = y + 124;
+    if (!it->trader.empty()) {
+        ui.text(x + 16, yy, "Best trader: " + it->trader + "  " + groupDigits(it->traderPrice) + " RUB", FS_SMALL, col::text);
+        yy += 28;
+    }
+    if (it->weight > 0) {
+        char buf[32];
+        snprintf(buf, sizeof buf, "Weight %.2f kg", it->weight);
+        ui.text(x + 16, yy, buf, FS_SMALL, col::dim);
+        yy += 28;
+    }
+    yy += 6;
+    for (const auto &l : ui.wrap(it->desc, FS_SMALL, w - 32)) {
+        if (yy > kBottom - 140)
+            break;
+        ui.text(x + 16, yy, l, FS_SMALL, col::dim);
+        yy += 26;
+    }
+    if (usedForId != id) {
+        usedForId = id;
+        usedForCache = usedFor(id);
+    }
+    if (!usedForCache.empty()) {
+        yy += 8;
+        ui.text(x + 16, yy, "Needed for", FS_SMALL, col::accent);
+        yy += 28;
+        for (const auto &u : usedForCache) {
+            if (yy > kBottom - 30) {
+                ui.text(x + 16, yy, "...", FS_SMALL, col::dim);
+                break;
+            }
+            ui.text(x + 16, yy, u, FS_SMALL, col::text, w - 32);
+            yy += 26;
+        }
+    }
+}
+
+void App::drawKeys() {
+    const int rowH = 48, top = kTop + 40;
+    int visible = (kBottom - top) / rowH;
+    dbList.clamp(dbRows.size(), visible);
+    for (int i = 0; i < visible && dbList.scroll + i < (int)dbRows.size(); i++) {
+        int idx = dbList.scroll + i;
+        const KeyInfo &k = db.keys[dbRows[idx]];
+        int y = top + i * rowH;
+        bool on = idx == dbList.sel;
+        ui.fill(16, y, 600, rowH - 4, on ? col::panelHi : col::panel);
+        if (on)
+            ui.fill(16, y, 4, rowH - 4, col::accent);
+        ui.icon(itemIcon(k.item), 26, y + 2, 40);
+        ui.text(76, y + 8, itemName(k.item), FS_SMALL, col::text, 400);
+        if (!k.pins.empty())
+            drawBadge(490, y + 10, "Map", col::warn);
+        if (!k.quests.empty())
+            drawBadge(548, y + 10, "Quest", col::accent);
+    }
+    drawScrollbar(620, top, visible * rowH, dbRows.size(), visible, dbList.scroll);
+    if (!dbRows.empty()) {
+        const KeyInfo &k = db.keys[dbRows[dbList.sel]];
+        drawItemDetail(k.item, 640, top, 624);
+        int y = kBottom - 30 - 26 * std::min<int>(k.quests.size(), 3);
+        if (k.uses)
+            ui.textRight(1248, top + 124, std::to_string(k.uses) + " uses", FS_SMALL, col::dim);
+        (void)y;
+    }
+    drawFooter({{"A", "Show lock"}, {"Y", "Search"}, {"</>", "Page"}, {"ZL/ZR", "Section"}});
+}
+
+void App::drawDbItems() {
+    const int rowH = 44, top = kTop + 40;
+    int visible = (kBottom - top) / rowH;
+    dbList.clamp(dbItemRows.size(), visible);
+    if (dbItemRows.empty())
+        ui.text(28, top + 10, "No items match.", FS_BODY, col::dim);
+    for (int i = 0; i < visible && dbList.scroll + i < (int)dbItemRows.size(); i++) {
+        int idx = dbList.scroll + i;
+        const std::string &id = dbItemRows[idx];
+        const DbItem &it = db.items.at(id);
+        int y = top + i * rowH;
+        bool on = idx == dbList.sel;
+        ui.fill(16, y, 600, rowH - 4, on ? col::panelHi : col::panel);
+        if (on)
+            ui.fill(16, y, 4, rowH - 4, col::accent);
+        ui.icon(itemIcon(id), 26, y + 2, 36);
+        ui.text(72, y + 6, it.name, FS_SMALL, col::text, 400);
+        if (it.price)
+            ui.textRight(604, y + 6, groupDigits(it.price), FS_SMALL, col::accent);
+    }
+    drawScrollbar(620, top, visible * rowH, dbItemRows.size(), visible, dbList.scroll);
+    if (!dbItemRows.empty())
+        drawItemDetail(dbItemRows[dbList.sel], 640, top, 624);
+    drawFooter({{"Y", "Search"}, {"X", "Clear"}, {"</>", "Page"}, {"ZL/ZR", "Section"}});
+}
+
+void App::drawQuest() {
+    const Quest &q = db.quests[openQuest];
+    bool done = st.tasksDone.count(q.id) > 0;
+    // Title strip.
+    ui.text(24, kTop - 10, q.name, FS_TITLE, col::text, 760);
+    std::string sub = q.trader + (q.level > 1 ? "   Level " + std::to_string(q.level) : "") +
+                      (q.map.empty() ? "" : "   " + q.map) +
+                      (q.faction.empty() ? "" : "   " + q.faction + " only");
+    ui.text(24, kTop + 26, sub, FS_SMALL, col::dim, 760);
+    int bx = 1256;
+    auto badge = [&](const std::string &t, SDL_Color c) {
+        int w = ui.measure(t, FS_SMALL) + 14;
+        bx -= w + 8;
+        drawBadge(bx, kTop + 4, t, c);
+    };
+    if (done)
+        badge("DONE", col::good);
+    if (q.kappa)
+        badge("Kappa", col::accent);
+    if (q.lightkeeper)
+        badge("Lightkeeper", col::violet);
+
+    int top = kTop + 60;
+    // Left: wiki guide.
+    ui.fill(16, top, 608, kBottom - top, col::panel);
+    int lines = (kBottom - top - 50) / 26;
+    int y = top + 12;
+    for (int i = 0; i < lines && textScroll + i < (int)questText.size(); i++) {
+        const std::string &l = questText[textScroll + i];
+        if (l.rfind("## ", 0) == 0)
+            ui.text(32, y, l.substr(3), FS_SMALL, col::accent);
+        else if (l.rfind("### ", 0) == 0)
+            ui.text(32, y, l.substr(4), FS_SMALL, col::warn);
+        else
+            ui.text(32, y, l, FS_SMALL, col::text);
+        y += 26;
+    }
+    drawScrollbar(616, top + 8, lines * 26, questText.size(), lines, textScroll);
+    ui.text(32, kBottom - 30, "Guide: Escape from Tarkov Wiki, CC BY-SA", FS_SMALL, col::faint);
+
+    // Right: structured details.
+    int rx = 640, rw = 624;
+    ui.fill(rx, top, rw, kBottom - top, col::panel);
+    SDL_Rect clipR{rx, top, rw, kBottom - top};
+    // Keep the selected row in view.
+    int ySel = 0, total = 0;
+    for (int i = 0; i < (int)qrows.size(); i++) {
+        if (i == qrowSel)
+            ySel = total;
+        total += qrows[i].h;
+    }
+    int viewH = kBottom - top - 16;
+    if (qrowSel >= 0) {
+        int h = qrows[qrowSel].h;
+        if (ySel < qrowScroll)
+            qrowScroll = ySel;
+        if (ySel + h > qrowScroll + viewH)
+            qrowScroll = ySel + h - viewH;
+    }
+    qrowScroll = std::clamp(qrowScroll, 0, std::max(0, total - viewH));
+    ui.clip(&clipR);
+    y = top + 8 - qrowScroll;
+    for (int i = 0; i < (int)qrows.size(); i++) {
+        const QRow &r = qrows[i];
+        if (y > kBottom || y + r.h < top) {
+            y += r.h;
+            continue;
+        }
+        bool on = i == qrowSel;
+        switch (r.kind) {
+        case QRow::HEAD:
+            ui.text(rx + 16, y + 8, r.text, FS_BODY, col::accent);
+            ui.fill(rx + 16, y + 38, rw - 32, 1, col::line);
+            break;
+        case QRow::TEXT:
+            for (size_t k = 0; k < r.lines.size(); k++)
+                ui.text(rx + 24, y + 2 + k * 26, r.lines[k], FS_SMALL, r.color);
+            break;
+        case QRow::ITEM: {
+            if (on)
+                ui.fill(rx + 8, y, rw - 16, r.h - 2, col::panelHi);
+            ui.icon(itemIcon(r.item), rx + 24, y + 2, 34);
+            std::string t = itemName(r.item) + (r.count > 1 ? "  x" + groupDigits(r.count) : "");
+            int w = ui.text(rx + 68, y + 6, t, FS_SMALL, col::text, 380);
+            if (!r.text.empty())
+                ui.text(rx + 80 + w, y + 6, r.text, FS_SMALL, col::dim, rw - 100 - w - 60);
+            break;
+        }
+        case QRow::OBJ: {
+            const Objective &o = q.objectives[r.obj];
+            if (on) {
+                ui.fill(rx + 8, y, rw - 16, r.h - 4, col::panelHi);
+                ui.fill(rx + 8, y, 4, r.h - 4, col::accent);
+            }
+            ui.disc(rx + 30, y + 15, 6, o.optional ? col::faint : col::accent);
+            int ly = y + 2;
+            for (const auto &l : r.lines) {
+                ui.text(rx + 46, ly, l, FS_SMALL, o.optional ? col::dim : col::text);
+                ly += 26;
+            }
+            int bx2 = rx + rw - 16;
+            if (!o.pins.empty()) {
+                bx2 -= ui.measure("Map", FS_SMALL) + 22;
+                drawBadge(bx2, y + 4, "Map", col::warn);
+            }
+            if (o.fir) {
+                bx2 -= ui.measure("FIR", FS_SMALL) + 22;
+                drawBadge(bx2, y + 4, "FIR", col::warn);
+            }
+            if (o.count > 1) {
+                std::string c = "x" + groupDigits(o.count);
+                bx2 -= ui.measure(c, FS_SMALL) + 12;
+                ui.text(bx2, y + 4, c, FS_SMALL, col::accent);
+            }
+            ly += 6;
+            if (!o.items.empty()) {
+                int ix = rx + 46;
+                for (const auto &id : o.items) {
+                    if (ix > rx + rw - 60)
+                        break;
+                    ui.icon(itemIcon(id), ix, ly, 38);
+                    ix += 42;
+                }
+                if (o.more)
+                    ui.text(ix + 6, ly + 8, "+" + std::to_string(o.more) + " more", FS_SMALL, col::dim);
+                else if (o.items.size() == 1)
+                    ui.text(ix + 6, ly + 8, itemName(o.items[0]), FS_SMALL, col::dim, rw - (ix - rx) - 30);
+                ly += 44;
+            }
+            if (o.hasBuild) {
+                for (const auto &a : o.build.attrs) {
+                    ui.text(rx + 46, ly, a, FS_SMALL, col::info);
+                    ly += 26;
+                }
+                if (!o.build.categories.empty()) {
+                    std::string c = "Must include: ";
+                    for (size_t k = 0; k < o.build.categories.size(); k++)
+                        c += (k ? ", " : "") + o.build.categories[k];
+                    ui.text(rx + 46, ly, c, FS_SMALL, col::info, rw - 70);
+                    ly += 26;
+                }
+                if (!o.build.parts.empty()) {
+                    int ix = rx + 46;
+                    for (const auto &id : o.build.parts) {
+                        if (ix > rx + rw - 60)
+                            break;
+                        ui.icon(itemIcon(id), ix, ly + 2, 38);
+                        ix += 42;
+                    }
+                }
+            }
+            break;
+        }
+        }
+        y += r.h;
+    }
+    ui.clip(nullptr);
+    drawScrollbar(rx + rw - 6, top + 8, viewH, total, viewH, qrowScroll);
+
+    bool hasPins = qrowSel >= 0 && qrows[qrowSel].kind == QRow::OBJ && !q.objectives[qrows[qrowSel].obj].pins.empty();
+    bool onItem = qrowSel >= 0 && qrows[qrowSel].kind == QRow::ITEM;
+    std::vector<std::pair<std::string, std::string>> hints = {{"B", "Back"}};
+    if (hasPins)
+        hints.push_back({"A", "Show on map"});
+    if (onItem)
+        hints.push_back({"A", "Item info"});
+    hints.push_back({"R-stick", "Scroll guide"});
+    drawFooter(hints);
+}
+
+void App::drawDatabase() {
+    ensureDb();
+    if (db.empty()) {
+        drawEmpty("No database yet.", "Connect to the internet and use Settings > Download latest data.");
+        drawFooter({{"+", "Quit"}});
+        return;
+    }
+    if (openQuest >= 0) {
+        drawQuest();
+        return;
+    }
+    if (dbDirty)
+        filterDb();
+    drawDbHeader();
+    switch (dbSection) {
+    case DB_QUESTS: drawQuestList(); break;
+    case DB_AMMO: drawAmmo(); break;
+    case DB_KEYS: drawKeys(); break;
+    case DB_ITEMS: drawDbItems(); break;
+    }
 }
 
 void App::drawProfile() {
@@ -1574,6 +2474,7 @@ void App::draw() {
     case TAB_CRAFTS: drawCrafts(); break;
     case TAB_TIMERS: drawTimers(); break;
     case TAB_MAPS: drawMaps(); break;
+    case TAB_DATABASE: drawDatabase(); break;
     case TAB_PROFILE: drawProfile(); break;
     case TAB_SETTINGS: drawSettings(); break;
     default: break;

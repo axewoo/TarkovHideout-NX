@@ -8,6 +8,7 @@
 #include <vector>
 
 static const int kAtlasCols = 32;
+static const int kPageIcons = kAtlasCols * kAtlasCols;
 static const int kIconPx = 64;
 
 static const int kFontPx[FS_COUNT] = {20, 24, 30};
@@ -41,8 +42,7 @@ bool Ui::init() {
 }
 
 void Ui::shutdown() {
-    if (icons)
-        SDL_DestroyTexture(icons);
+    setIcons({});
     for (auto &[k, c] : cache)
         SDL_DestroyTexture(c.tex);
     cache.clear();
@@ -157,18 +157,19 @@ SDL_Texture *Ui::loadImage(const std::string &path, int *w, int *h) {
     return tex;
 }
 
-void Ui::setIcons(SDL_Texture *atlas) {
-    if (icons)
-        SDL_DestroyTexture(icons);
-    icons = atlas;
+void Ui::setIcons(const std::vector<SDL_Texture *> &pages) {
+    for (SDL_Texture *t : icons)
+        SDL_DestroyTexture(t);
+    icons = pages;
 }
 
 void Ui::icon(int idx, int x, int y, int size) {
     fill(x, y, size, size, col::cell);
-    if (idx >= 0 && icons) {
-        SDL_Rect src{(idx % kAtlasCols) * kIconPx, (idx / kAtlasCols) * kIconPx, kIconPx, kIconPx};
+    int page = idx / kPageIcons, cell = idx % kPageIcons;
+    if (idx >= 0 && page < (int)icons.size() && icons[page]) {
+        SDL_Rect src{(cell % kAtlasCols) * kIconPx, (cell / kAtlasCols) * kIconPx, kIconPx, kIconPx};
         SDL_Rect dst{x + 1, y + 1, size - 2, size - 2};
-        SDL_RenderCopy(renderer, icons, &src, &dst);
+        SDL_RenderCopy(renderer, icons[page], &src, &dst);
     }
     rect(x, y, size, size, col::line);
 }
@@ -207,6 +208,36 @@ int Ui::measure(const std::string &s, FontSize fs) {
         return 0;
     TTF_SizeUTF8(fonts[fs], s.c_str(), &w, &h);
     return w;
+}
+
+std::vector<std::string> Ui::wrap(const std::string &s, FontSize fs, int w) {
+    std::vector<std::string> lines;
+    size_t start = 0;
+    while (start <= s.size()) {
+        size_t nl = s.find('\n', start);
+        std::string para = s.substr(start, nl == std::string::npos ? std::string::npos : nl - start);
+        std::string line;
+        size_t i = 0;
+        while (i < para.size()) {
+            size_t sp = para.find(' ', i);
+            std::string word = para.substr(i, sp == std::string::npos ? std::string::npos : sp - i);
+            std::string cand = line.empty() ? word : line + " " + word;
+            if (!line.empty() && measure(cand, fs) > w) {
+                lines.push_back(line);
+                line = word;
+            } else {
+                line = cand;
+            }
+            if (sp == std::string::npos)
+                break;
+            i = sp + 1;
+        }
+        lines.push_back(line);
+        if (nl == std::string::npos)
+            break;
+        start = nl + 1;
+    }
+    return lines;
 }
 
 std::string Ui::fit(const std::string &s, FontSize fs, int maxW) {

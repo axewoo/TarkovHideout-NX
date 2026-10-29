@@ -146,6 +146,8 @@ class Db:
                 cat = self.categories.get(b.ref_id(c)) if isinstance(self.categories, dict) else None
                 gs["cats"].append((cat or {}).get("name") or str(b.ref_id(c)))
             out["gs"] = gs
+            if gs["w"]:
+                out.setdefault("it", []).insert(0, gs["w"])
         if o.get("type") == "skill" and o.get("skill"):
             out["d"] = out["d"] or f"Reach {o['skill']} level {o.get('level')}"
         return out

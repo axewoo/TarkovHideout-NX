@@ -4,7 +4,8 @@ A hideout companion for Escape From Tarkov that runs as Nintendo Switch homebrew
 It shows every hideout station, the items each level needs (with item icons),
 what you still have to find across the whole hideout, and the crafts you can
 run, with craft timers. It also has interactive maps with extracts, transits
-and boss spawns, and a profile page with your level, raid stats and skills.
+and boss spawns, a database of quests, ammo, keys and items, and a profile page
+with your level, raid stats and skills.
 
 It never talks to Battlestate's servers. Game data comes from
 [tarkov.dev](https://tarkov.dev), and your progress can be pulled from
@@ -30,6 +31,24 @@ Progress and settings are saved in `sdmc:/switch/TarkovHideout/`.
 TarkovTracker's API is read-only for the hideout, so sync replaces the app's
 hideout progress with what TarkovTracker has. Changes you make in the app stay
 on the Switch until the next sync overwrites them.
+
+## Database
+
+The Database tab has four sections (ZL / ZR):
+
+- **Quests**: every quest by trader. A quest page shows the wiki guide on the
+  left and, on the right, requirements, keys and starting gear, objectives
+  (with Gunsmith build specs) and rewards. Objectives with a known location
+  open the map with a pin on it. Quests completed on TarkovTracker are marked.
+- **Ammo**: damage, penetration, armor damage, fragmentation, speed and flea
+  price, filterable by caliber.
+- **Keys**: what each key is for, and where its lock is on the map.
+- **Items**: search any item for prices, description and what it is needed for
+  (hideout, quests, crafts).
+
+Everything is stored on the SD card, so it works offline. Quest guides are
+plain-text extracts from the [Escape from Tarkov Wiki](https://escapefromtarkov.fandom.com),
+licensed CC BY-SA.
 
 ## Profile
 
@@ -62,6 +81,12 @@ behind the game by a few days.
 | Maps | Left / Right | Jump between markers |
 | Maps | Up / Down | Filter marker type |
 | Maps | Y / B | Toggle labels / reset view |
+| Database | ZL / ZR | Switch section |
+| Database | Left / Right | Trader or caliber filter (page in Keys and Items) |
+| Database | Y / X | Search / clear search |
+| Database | A | Open quest, show key lock on the map |
+| Quest page | Up / Down, A | Pick an objective or item, show it on the map |
+| Quest page | Right stick, ZL / ZR | Scroll the guide |
 | Profile | A / X | Refresh / change profile ID |
 
 ## Data
