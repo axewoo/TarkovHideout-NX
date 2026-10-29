@@ -259,6 +259,8 @@ Built with libnx, SDL2 (ttf, image), libcurl and nlohmann/json. The PC version u
 
 ## Credits and licenses
 
+This app's own code is under the [MIT License](LICENSE). The data, pictures and libraries below keep their own licenses.
+
 **Data and pictures**
 
 - Game data, item icons, map renders and map plans: [tarkov.dev](https://tarkov.dev) and the contributors credited there. The game's images and icons are the property of Battlestate Games.
