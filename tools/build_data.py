@@ -265,7 +265,7 @@ def build_mode(mode):
             "req": craft_items(res, c.get("requiredItems")),
             "rew": craft_items(res, c.get("rewardItems")),
         })
-    craft_out.sort(key=lambda c: (str(c["st"]), c["lvl"], c["rew"][0]["n"] if c["rew"] else ""))
+    craft_out.sort(key=lambda c: (res.station(c["st"]), c["lvl"], c["rew"][0]["n"] if c["rew"] else ""))
 
     n_levels = sum(len(s["levels"]) for s in stations)
     print(f"[{mode}] {len(stations)} stations, {n_levels} levels, {len(craft_out)} crafts, "
