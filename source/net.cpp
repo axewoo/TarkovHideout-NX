@@ -36,6 +36,10 @@ HttpResult httpGet(const std::string &url, const std::vector<std::string> &heade
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &res.body);
+#ifdef _WIN32
+    // Trust the certificates Windows trusts; there is no CA bundle file to point at.
+    curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, (long)CURLSSLOPT_NATIVE_CA);
+#endif
     if (list)
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, list);
 
