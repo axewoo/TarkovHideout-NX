@@ -2,6 +2,7 @@ package io.github.axewoo.tarkovhideout;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -25,7 +26,7 @@ public class TarkovActivity extends SDLActivity {
 
     // Called from source/net.cpp: 4 bytes of HTTP status (-1 when the request failed), then the
     // body or the error message.
-    public static byte[] httpGet(String url, String[] headers) {
+    public static byte[] http(String url, String[] headers, byte[] body) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         HttpURLConnection c = null;
         try {
@@ -37,6 +38,13 @@ public class TarkovActivity extends SDLActivity {
                 int i = h.indexOf(':');
                 if (i > 0)
                     c.setRequestProperty(h.substring(0, i).trim(), h.substring(i + 1).trim());
+            }
+            if (body != null) {
+                c.setRequestMethod("POST");
+                c.setDoOutput(true);
+                OutputStream os = c.getOutputStream();
+                os.write(body);
+                os.close();
             }
             int status = c.getResponseCode();
             InputStream in = status >= 400 ? c.getErrorStream() : c.getInputStream();

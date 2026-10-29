@@ -12,6 +12,11 @@ void netExit() {}
 void netThreadExit() {}
 
 HttpResult httpGet(const std::string &url, const std::vector<std::string> &headers, const std::atomic<bool> *) {
+    return httpPost(url, headers, std::string());
+}
+
+// An empty body makes it a GET (the Java side picks the method).
+HttpResult httpPost(const std::string &url, const std::vector<std::string> &headers, const std::string &body) {
     HttpResult res;
     JNIEnv *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
     jobject activity = static_cast<jobject>(SDL_AndroidGetActivity());
@@ -22,10 +27,11 @@ HttpResult httpGet(const std::string &url, const std::vector<std::string> &heade
     jclass cls = env->GetObjectClass(activity);
     // static byte[] httpGet(String url, String[] headers): 4 bytes of status (big endian, -1 when
     // the request failed) followed by the body, or the error message.
-    jmethodID mid = env->GetStaticMethodID(cls, "httpGet", "(Ljava/lang/String;[Ljava/lang/String;)[B");
+    // static byte[] http(String url, String[] headers, byte[] body): body null for a GET.
+    jmethodID mid = env->GetStaticMethodID(cls, "http", "(Ljava/lang/String;[Ljava/lang/String;[B)[B");
     if (!mid) {
         env->ExceptionClear();
-        res.error = "httpGet missing";
+        res.error = "http missing";
         env->DeleteLocalRef(cls);
         env->DeleteLocalRef(activity);
         return res;
@@ -40,7 +46,14 @@ HttpResult httpGet(const std::string &url, const std::vector<std::string> &heade
         env->DeleteLocalRef(h);
     }
     jstring ju = env->NewStringUTF(url.c_str());
-    auto out = static_cast<jbyteArray>(env->CallStaticObjectMethod(cls, mid, ju, jh));
+    jbyteArray jb = nullptr;
+    if (!body.empty()) {
+        jb = env->NewByteArray(body.size());
+        env->SetByteArrayRegion(jb, 0, body.size(), reinterpret_cast<const jbyte *>(body.data()));
+    }
+    auto out = static_cast<jbyteArray>(env->CallStaticObjectMethod(cls, mid, ju, jh, jb));
+    if (jb)
+        env->DeleteLocalRef(jb);
     if (env->ExceptionCheck()) {
         env->ExceptionClear();
         out = nullptr;
@@ -102,7 +115,8 @@ void netExit() {
     curl_global_cleanup();
 }
 
-HttpResult httpGet(const std::string &url, const std::vector<std::string> &headers, const std::atomic<bool> *cancel) {
+static HttpResult request(const std::string &url, const std::vector<std::string> &headers,
+                          const std::atomic<bool> *cancel, const std::string *postBody) {
     HttpResult res;
     if (!threadCurl)
         threadCurl = curl_easy_init();
@@ -130,6 +144,10 @@ HttpResult httpGet(const std::string &url, const std::vector<std::string> &heade
 #endif
     if (list)
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, list);
+    if (postBody) {
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postBody->c_str());
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)postBody->size());
+    }
     if (cancel) {
         curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progressCb);
         curl_easy_setopt(curl, CURLOPT_XFERINFODATA, const_cast<std::atomic<bool> *>(cancel));
@@ -145,5 +163,13 @@ HttpResult httpGet(const std::string &url, const std::vector<std::string> &heade
     }
     curl_slist_free_all(list);
     return res;
+}
+
+HttpResult httpGet(const std::string &url, const std::vector<std::string> &headers, const std::atomic<bool> *cancel) {
+    return request(url, headers, cancel, nullptr);
+}
+
+HttpResult httpPost(const std::string &url, const std::vector<std::string> &headers, const std::string &body) {
+    return request(url, headers, nullptr, &body);
 }
 #endif
