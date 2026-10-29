@@ -30,10 +30,10 @@
 #define TRACKER_API "https://api.tarkovtracker.org"
 #define PROFILE_API "https://players.tarkov.dev/"
 
-enum Tab { TAB_STATIONS, TAB_ITEMS, TAB_CRAFTS, TAB_TIMERS, TAB_MAPS, TAB_AMMO, TAB_DATABASE, TAB_PROFILE, TAB_SETTINGS,
-           TAB_COUNT };
-static const char *kTabNames[TAB_COUNT] = {"Stations", "Needed", "Crafts", "Timers", "Maps", "Ammo", "Database", "Profile",
-                                           "Settings"};
+enum Tab { TAB_STATIONS, TAB_ITEMS, TAB_CRAFTS, TAB_TIMERS, TAB_MAPS, TAB_AMMO, TAB_DATABASE, TAB_KAPPA, TAB_PROFILE,
+           TAB_SETTINGS, TAB_COUNT };
+static const char *kTabNames[TAB_COUNT] = {"Stations", "Needed", "Crafts", "Timers", "Maps", "Ammo", "Database", "Kappa",
+                                           "Profile", "Settings"};
 
 enum DbSection { DB_QUESTS, DB_KEYS, DB_ITEMS, DB_COUNT };
 static const char *kDbNames[DB_COUNT] = {"Quests", "Keys", "Items"};
@@ -45,7 +45,13 @@ static const int kMapTop = 50;
 static const int kMapBottom = 676;
 static const int kMapTile = 2048;
 
-static const SDL_Color kMarkerColor[MK_COUNT] = {col::good, col::info, col::accent, col::violet, col::bad};
+// Looked up per draw so they follow the theme.
+static const struct {
+    SDL_Color operator[](int t) const {
+        const SDL_Color c[MK_COUNT] = {col::good, col::info, col::accent, col::violet, col::bad};
+        return c[t];
+    }
+} kMarkerColor;
 static const char *kMarkerName[MK_COUNT] = {"PMC extract", "Scav extract", "Shared extract", "Transit", "Boss"};
 
 static std::string readFile(const std::string &path) {
@@ -415,6 +421,22 @@ private:
     void drawScrollbar(int x, int y, int h, int count, int visible, int scroll);
     int drawBadge(int x, int y, const std::string &s, SDL_Color c);
 
+    // Kappa: the Collector quest's items
+    void ensureKappa();
+    std::vector<int> kappaRows() const;
+    void inputKappa();
+    void drawKappa();
+    std::vector<std::string> kappaItems;  // item ids, in quest order
+    std::string kappaQuestId;
+    int kappaSel = 0, kappaScroll = 0;
+    int kappaFilter = 0;  // 0 all, 1 still needed, 2 found
+
+    // Theme picker (Settings)
+    void inputThemePicker();
+    void drawThemePicker();
+    bool themePicking = false;
+    int themeSel = 0, themeBefore = 0;
+
     void rebuildNeeded();
     std::vector<const Craft *> visibleCrafts() const;
     const Craft *craftById(const std::string &id) const;
@@ -600,6 +622,7 @@ bool App::init() {
         return false;
 
     loadState(STATE_PATH, st);
+    applyTheme(themeIndex(st.theme));
     loadData();
     if (data.empty())
         downloadData(true);
@@ -857,16 +880,22 @@ void App::syncTracker() {
         return;
     }
     std::string err;
-    if (!applyTrackerProgress(r.body, data, st, err)) {
+    int trackerLevels = 0;
+    if (!applyTrackerProgress(r.body, data, st, trackerLevels, err)) {
         setStatus("Sync failed: " + err, col::bad);
         return;
     }
     st.lastSync = nowString();
     needDirty = true;
     save();
-    setStatus("Synced " + (st.account.empty() ? std::string("progress") : st.account) + " from TarkovTracker (" +
-                  (st.mode == "pve" ? "PVE" : "PVP") + ")",
-              col::good);
+    std::string who = st.account.empty() ? std::string("progress") : st.account;
+    std::string mode = st.mode == "pve" ? "PVE" : "PVP";
+    if (trackerLevels == 0)
+        setStatus("Synced " + who + " (" + mode + "). TarkovTracker has no hideout levels, so yours were kept",
+                  col::warn);
+    else
+        setStatus("Synced " + who + " (" + mode + "): " + std::to_string(trackerLevels) +
+                      " hideout levels from TarkovTracker, merged with yours", col::good);
 }
 
 static bool keyboard(const char *header, const char *guide, const std::string &initial, bool numeric,
@@ -1058,6 +1087,7 @@ void App::input() {
     case TAB_MAPS: inputMaps(); break;
     case TAB_AMMO: inputAmmo(); break;
     case TAB_DATABASE: inputDatabase(); break;
+    case TAB_KAPPA: inputKappa(); break;
     case TAB_PROFILE: inputProfile(); break;
     case TAB_SETTINGS: inputSettings(); break;
     default: break;
@@ -1548,10 +1578,14 @@ void App::inputProfile() {
         skillScroll = std::min(std::max(0, n - 12), skillScroll + 1);
 }
 
-enum SettingRow { SET_TOKEN, SET_SYNC, SET_SYNC_LAUNCH, SET_PROFILE, SET_MODE, SET_DOWNLOAD, SET_PICTURES, SET_RESET,
-                  SET_COUNT };
+enum SettingRow { SET_TOKEN, SET_SYNC, SET_SYNC_LAUNCH, SET_PROFILE, SET_MODE, SET_THEME, SET_DOWNLOAD, SET_PICTURES,
+                  SET_RESET, SET_COUNT };
 
 void App::inputSettings() {
+    if (themePicking) {
+        inputThemePicker();
+        return;
+    }
     if (in.up()) {
         settingsList.move(-1, SET_COUNT);
         confirmReset = false;
@@ -1582,6 +1616,10 @@ void App::inputSettings() {
         break;
     case SET_DOWNLOAD: downloadData(false); break;
     case SET_PICTURES: downloadPictures(); break;
+    case SET_THEME:
+        themePicking = true;
+        themeBefore = themeSel = themeIndex(st.theme);
+        break;
     case SET_RESET:
         if (!confirmReset) {
             confirmReset = true;
@@ -1715,6 +1753,234 @@ void App::pointerInput() {
     }
 }
 
+
+// ---------------------------------------------------------------- themes
+
+static const int kThemeCols = 4;
+
+void App::inputThemePicker() {
+    int n = themes().size();
+    int before = themeSel;
+    if (in.left() && themeSel % kThemeCols > 0)
+        themeSel--;
+    if (in.right() && themeSel % kThemeCols < kThemeCols - 1 && themeSel + 1 < n)
+        themeSel++;
+    if (in.up() && themeSel >= kThemeCols)
+        themeSel -= kThemeCols;
+    if (in.downDir() && themeSel + kThemeCols < n)
+        themeSel += kThemeCols;
+    // The whole app previews the highlighted theme; B puts the old one back.
+    if (themeSel != before)
+        applyTheme(themeSel);
+    if (in.pressed(HidNpadButton_A)) {
+        st.theme = themes()[themeSel].name;
+        save();
+        themePicking = false;
+        setStatus(std::string("Theme set to ") + themes()[themeSel].name, col::good);
+    } else if (in.pressed(HidNpadButton_B)) {
+        applyTheme(themeBefore);
+        themePicking = false;
+    }
+}
+
+void App::drawThemePicker() {
+    const auto &list = themes();
+    int n = list.size();
+    const int gap = 12, cw = (1248 - gap * (kThemeCols - 1)) / kThemeCols, ch = 138;
+    for (int i = 0; i < n; i++) {
+        const Theme &t = list[i];
+        int x = 16 + i % kThemeCols * (cw + gap), y = kTop - 8 + i / kThemeCols * (ch + gap);
+        bool on = i == themeSel;
+        onTap(x, y, cw, ch, [this, i](int taps) {
+            if (themeSel != i) {
+                themeSel = i;
+                applyTheme(i);
+            }
+            if (taps >= 2)
+                press(HidNpadButton_A);
+        });
+        // A small mock of the app in the theme's own colors.
+        ui.fill(x, y, cw, ch, t.bg);
+        ui.fill(x, y, cw, 20, t.bgTop);
+        ui.fill(x, y, cw, 2, t.accent);
+        ui.fill(x + 12, y + 17, 46, 3, t.accent);
+        int pw = cw * 55 / 100;
+        ui.fill(x + 10, y + 28, pw, 70, t.panel);
+        ui.fill(x + 10, y + 34, pw, 26, t.panelHi);
+        ui.fill(x + 10, y + 34, 3, 26, t.accent);
+        ui.text(x + 20, y + 35, "Stations", FS_SMALL, t.text, pw - 20);
+        ui.text(x + 20, y + 66, "Level 2  0 / 5", FS_SMALL, t.dim, pw - 20);
+        const SDL_Color sw[] = {t.accent, t.good, t.warn, t.bad, t.info, t.violet};
+        int sx = x + 22 + pw, sz = (cw - pw - 40) / 3;
+        for (int k = 0; k < 6; k++)
+            ui.fill(sx + k % 3 * (sz + 4), y + 30 + k / 3 * (sz + 4), sz, sz, sw[k]);
+        ui.fill(x, y + ch - 34, cw, 34, t.panel);
+        ui.text(x + 12, y + ch - 30, t.name, FS_SMALL, t.text, cw - 24);
+        if (on) {
+            ui.rect(x, y, cw, ch, col::accent);
+            ui.rect(x + 1, y + 1, cw - 2, ch - 2, col::accent);
+        } else {
+            ui.rect(x, y, cw, ch, t.line);
+        }
+    }
+    drawFooter({{"A", "Use theme"}, {"B", "Cancel"}});
+}
+
+// ---------------------------------------------------------------- kappa
+
+static const int kKappaCols = 10;
+
+void App::ensureKappa() {
+    ensureDb();
+    if (!kappaItems.empty() || db.quests.empty())
+        return;
+    for (const Quest &q : db.quests) {
+        if (q.name != "Collector")
+            continue;
+        kappaQuestId = q.id;
+        for (const Objective &o : q.objectives)
+            if (o.type == "giveItem" && !o.items.empty() &&
+                std::find(kappaItems.begin(), kappaItems.end(), o.items[0]) == kappaItems.end())
+                kappaItems.push_back(o.items[0]);
+    }
+}
+
+std::vector<int> App::kappaRows() const {
+    std::vector<int> rows;
+    bool done = st.tasksDone.count(kappaQuestId) > 0;
+    for (int i = 0; i < (int)kappaItems.size(); i++) {
+        bool found = done || st.kappaFound.count(kappaItems[i]);
+        if (kappaFilter == 0 || (kappaFilter == 1) != found)
+            rows.push_back(i);
+    }
+    return rows;
+}
+
+void App::inputKappa() {
+    ensureKappa();
+    if (in.pressed(HidNpadButton_Y)) {
+        kappaFilter = (kappaFilter + 1) % 3;
+        kappaSel = kappaScroll = 0;
+    }
+    auto rows = kappaRows();
+    int n = rows.size();
+    if (n == 0)
+        return;
+    kappaSel = std::clamp(kappaSel, 0, n - 1);
+    if (in.left() && kappaSel > 0)
+        kappaSel--;
+    if (in.right() && kappaSel + 1 < n)
+        kappaSel++;
+    if (in.up() && kappaSel >= kKappaCols)
+        kappaSel -= kKappaCols;
+    if (in.downDir() && kappaSel + kKappaCols < n)
+        kappaSel += kKappaCols;
+    if (in.pressed(HidNpadButton_A)) {
+        const std::string &id = kappaItems[rows[kappaSel]];
+        if (st.kappaFound.count(id))
+            st.kappaFound.erase(id);
+        else
+            st.kappaFound.insert(id);
+        save();
+    }
+}
+
+void App::drawKappa() {
+    ensureKappa();
+    if (kappaItems.empty()) {
+        drawEmpty("No Collector data yet.", "Connect to the internet and use Settings > Download latest hideout data.");
+        drawFooter({{"+", "Quit"}});
+        return;
+    }
+    bool done = st.tasksDone.count(kappaQuestId) > 0;
+    int found = 0;
+    for (const auto &id : kappaItems)
+        found += done || st.kappaFound.count(id);
+    int total = kappaItems.size();
+    int kq = 0, kqDone = 0;
+    for (const Quest &q : db.quests)
+        if (q.kappa) {
+            kq++;
+            kqDone += st.tasksDone.count(q.id) > 0;
+        }
+
+    // Progress strip: Collector items, then the quests the Kappa container needs.
+    ui.fill(16, kTop - 8, 1248, 56, col::panel);
+    ui.fill(16, kTop - 8, 4, 56, col::accent);
+    int w = ui.text(34, kTop - 2, "Collector", FS_BODY, col::text);
+    ui.text(34 + w + 14, kTop + 2, done ? "complete on TarkovTracker" : "items found in raid", FS_SMALL, col::dim);
+    std::string cnt = std::to_string(found) + " / " + std::to_string(total);
+    ui.textRight(760, kTop - 2, cnt, FS_BODY, found == total ? col::good : col::accent);
+    ui.progress(34, kTop + 34, 726, 6, total ? float(found) / total : 0, found == total ? col::good : col::accent);
+    ui.text(800, kTop - 2, "Kappa quests", FS_SMALL, col::dim);
+    std::string kqs = st.tasksDone.empty() ? "sync to see" : std::to_string(kqDone) + " / " + std::to_string(kq);
+    ui.textRight(1248, kTop - 2, kqs, FS_SMALL, col::text);
+    ui.progress(800, kTop + 34, 448, 6, kq ? float(kqDone) / kq : 0, col::info);
+    static const char *filters[] = {"All items", "Still needed", "Found"};
+
+    auto rows = kappaRows();
+    const int gap = 8, cw = (1248 - gap * (kKappaCols - 1)) / kKappaCols, ch = 112, top = kTop + 58;
+    const int detailH = 70;
+    int visible = std::max(1, (kBottom - top - detailH + gap) / (ch + gap));
+    int nrows = (rows.size() + kKappaCols - 1) / kKappaCols;
+    kappaSel = std::clamp(kappaSel, 0, std::max(0, (int)rows.size() - 1));
+    int selRow = kappaSel / kKappaCols;
+    if (selRow < kappaScroll)
+        kappaScroll = selRow;
+    if (selRow >= kappaScroll + visible)
+        kappaScroll = selRow - visible + 1;
+    kappaScroll = std::clamp(kappaScroll, 0, std::max(0, nrows - visible));
+    if (rows.empty())
+        ui.text(34, top + 20, kappaFilter == 1 ? "Nothing left to find. Go get that Kappa!" : "No items marked found yet.",
+                FS_BODY, col::dim);
+    for (int k = kappaScroll * kKappaCols; k < (int)rows.size() && k < (kappaScroll + visible) * kKappaCols; k++) {
+        const std::string &id = kappaItems[rows[k]];
+        int x = 16 + k % kKappaCols * (cw + gap), y = top + (k / kKappaCols - kappaScroll) * (ch + gap);
+        bool on = k == kappaSel, have = done || st.kappaFound.count(id);
+        onTap(x, y, cw, ch, [this, k](int taps) {
+            kappaSel = k;
+            if (taps >= 2)
+                press(HidNpadButton_A);
+        });
+        ui.fill(x, y, cw, ch, on ? col::panelHi : col::panel);
+        if (have)
+            ui.fill(x, y, cw, 3, col::good);
+        ui.icon(itemIcon(id), x + (cw - 64) / 2, y + 10, 64);
+        std::string name = itemName(id);
+        int tw = std::min(ui.measure(name, FS_SMALL), cw - 12);
+        ui.text(x + (cw - tw) / 2, y + 80, name, FS_SMALL, have ? col::good : (on ? col::text : col::dim), cw - 12);
+        if (have) {
+            ui.disc(x + cw - 16, y + 18, 10, col::good);
+            ui.fill(x + cw - 21, y + 18, 4, 2, col::bg);
+            ui.fill(x + cw - 19, y + 20, 2, 2, col::bg);
+            ui.fill(x + cw - 17, y + 16, 2, 4, col::bg);
+            ui.fill(x + cw - 15, y + 14, 2, 2, col::bg);
+            ui.fill(x + cw - 13, y + 12, 2, 2, col::bg);
+        }
+        if (on)
+            ui.rect(x, y, cw, ch, col::accent);
+    }
+    drawScrollbar(1268, top, visible * (ch + gap) - gap, nrows, visible, kappaScroll);
+
+    // The highlighted item.
+    int dy = kBottom - detailH + 6;
+    ui.fill(16, dy, 1248, detailH - 6, col::panel);
+    if (!rows.empty()) {
+        const std::string &id = kappaItems[rows[kappaSel]];
+        bool have = done || st.kappaFound.count(id);
+        ui.icon(itemIcon(id), 26, dy + 6, 52);
+        ui.text(92, dy + 6, itemName(id), FS_BODY, col::text, 700);
+        const DbItem *it = db.item(id);
+        std::string price = it && it->price ? "Flea " + groupDigits(it->price) + " RUB" : "Not sold on flea";
+        if (it && !it->trader.empty())
+            price += "   " + it->trader + " pays " + groupDigits(it->traderPrice) + " RUB";
+        ui.text(92, dy + 36, price, FS_SMALL, col::dim, 800);
+        drawBadge(1248 - ui.measure(have ? "Found in raid" : "Still needed", FS_SMALL) - 14, dy + 18,
+                  have ? "Found in raid" : "Still needed", have ? col::good : col::warn);
+    }
+    bool have = !rows.empty() && (done || st.kappaFound.count(kappaItems[rows[kappaSel]]));
+    drawFooter({{"A", have ? "Unmark" : "Mark found"}, {"Y", std::string("Showing: ") + filters[kappaFilter]}, {"+", "Quit"}});
+}
 
 // ---------------------------------------------------------------- database
 
@@ -2212,19 +2478,27 @@ void App::drawHeader() {
     int x = 64;
     ui.hint(20, 10, "L", "");
     onTap(0, 0, x, 46, [this](int) { press(HidNpadButton_L); });
+    // Tabs get narrower padding when a long player name would push them past the R hint.
+    int textW = 0;
+    for (int i = 0; i < TAB_COUNT; i++)
+        textW += ui.measure(i == TAB_PROFILE ? who : kTabNames[i], FS_SMALL) + 2;
+    textW += ui.measure(mode, FS_SMALL) + 22;
+    int pad = std::clamp((1280 - x - 60 - textW) / TAB_COUNT, 14, 28);
+    if (ui.measure(who, FS_SMALL) > 200)
+        who = who.substr(0, 16) + "...";
     for (int i = 0; i < TAB_COUNT; i++) {
         bool on = i == tab;
         std::string label = i == TAB_PROFILE ? who : kTabNames[i];
         int lw = ui.measure(label, FS_SMALL);
-        int w = lw + 28 + (i == TAB_PROFILE ? ui.measure(mode, FS_SMALL) + 22 : 0);
+        int w = lw + pad + (i == TAB_PROFILE ? ui.measure(mode, FS_SMALL) + 22 : 0);
         onTap(x, 0, w + 2, 46, [this, i](int) { setTab(i); });
         if (on) {
             ui.fill(x, 4, w, 42, col::panel);
             ui.fill(x, 43, w, 3, col::accent);
         }
-        ui.text(x + 14, 12, label, FS_SMALL, on ? col::text : col::dim);
+        ui.text(x + pad / 2, 12, label, FS_SMALL, on ? col::text : col::dim);
         if (i == TAB_PROFILE)
-            drawBadge(x + 22 + lw, 11, mode, pve ? col::good : col::bad);
+            drawBadge(x + pad / 2 + 8 + lw, 11, mode, pve ? col::good : col::bad);
         x += w + 2;
     }
     ui.hint(x + 10, 10, "R", "");
@@ -2614,6 +2888,29 @@ void App::drawMapPicker() {
     drawFooter({{"A", "Open"}, {"+", "Quit"}});
 }
 
+// Map overlays sit on dark map art, so light themes draw them with the default theme's ink.
+struct MapInk {
+    SDL_Color *slots[7] = {&col::text, &col::dim, &col::faint, &col::shadow, &col::panel, &col::panelHi, &col::line};
+    SDL_Color saved[7];
+    bool active;
+    MapInk() : active(col::bg.r + col::bg.g + col::bg.b > 384) {
+        if (!active)
+            return;
+        const Theme &d = themes()[0];
+        const SDL_Color ink[7] = {d.text, d.dim, d.faint, d.shadow, d.panel, d.panelHi, d.line};
+        for (int i = 0; i < 7; i++) {
+            saved[i] = *slots[i];
+            *slots[i] = ink[i];
+        }
+    }
+    void restore() {
+        for (int i = 0; active && i < 7; i++)
+            *slots[i] = saved[i];
+        active = false;
+    }
+    ~MapInk() { restore(); }
+};
+
 void App::drawMaps() {
     const MapInfo *m = currentMap();
     if (!m) {
@@ -2627,6 +2924,7 @@ void App::drawMaps() {
     }
     int top, bottom;
     mapViewport(top, bottom);
+    MapInk ink;
     float viewW = 1280, viewH = bottom - top;
     float fit = std::min(viewW / m->w, viewH / m->h);
     float scale = fit * mapZoom;
@@ -2777,6 +3075,7 @@ void App::drawMaps() {
     if (!m->alt.empty())
         hints.push_back({"R3", mapPlan ? "Render" : "Plan"});
     hints.push_back({"-", "Full"});
+    ink.restore();
     drawFooter(hints);
 }
 
@@ -2870,8 +3169,13 @@ void App::drawQuestList() {
 }
 
 // Colors for rounds pinned to the chart.
-static const SDL_Color kPickColors[] = {col::info, col::good, col::violet, col::warn, col::bad,
-                                        {96, 200, 190, 255}, {226, 120, 170, 255}, {230, 226, 210, 255}};
+static const struct {
+    SDL_Color operator[](size_t k) const {
+        const SDL_Color c[] = {col::info, col::good,          col::violet,         col::warn,
+                               col::bad,  {96, 200, 190, 255}, {226, 120, 170, 255}, col::text};
+        return c[k];
+    }
+} kPickColors;
 static const int kMaxPicks = 8;
 
 void App::filterAmmo() {
@@ -3545,6 +3849,10 @@ void App::drawProfile() {
 }
 
 void App::drawSettings() {
+    if (themePicking) {
+        drawThemePicker();
+        return;
+    }
     std::string tok = st.token.empty() ? "not set" : "..." + st.token.substr(st.token.size() > 4 ? st.token.size() - 4 : 0);
     struct Row {
         std::string label, value;
@@ -3555,6 +3863,7 @@ void App::drawSettings() {
         {"Sync on launch", st.syncOnLaunch ? "On" : "Off"},
         {"tarkov.dev profile ID", st.profileId.empty() ? "not set" : st.profileId},
         {"Game mode", st.mode == "pve" ? "PVE" : "PVP"},
+        {"Theme", themes()[themeIndex(st.theme)].name},
         {"Download latest data, icons and maps", data.empty() ? "no data" : data.generated},
         {"Download all wiki pictures", "for offline guides"},
         {confirmReset ? "Clear local progress? Press A again" : "Clear local progress and timers", ""},
@@ -3635,6 +3944,7 @@ void App::draw() {
     case TAB_MAPS: drawMaps(); break;
     case TAB_AMMO: drawAmmo(); break;
     case TAB_DATABASE: drawDatabase(); break;
+    case TAB_KAPPA: drawKappa(); break;
     case TAB_PROFILE: drawProfile(); break;
     case TAB_SETTINGS: drawSettings(); break;
     default: break;

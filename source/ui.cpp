@@ -342,3 +342,86 @@ void Ui::endFrame() {
         cache.erase(k);
     }
 }
+
+static SDL_Color rgb(int r, int g, int b, int a = 255) { return SDL_Color{Uint8(r), Uint8(g), Uint8(b), Uint8(a)}; }
+
+const std::vector<Theme> &themes() {
+    // bg, bgTop, panel, panelHi, cell, line, text, dim, faint, accent, good, warn, bad, info, violet, shadow
+    static const std::vector<Theme> list = {
+        {"Tarkov", rgb(14, 15, 13), rgb(24, 25, 21), rgb(27, 28, 24), rgb(46, 46, 38), rgb(36, 37, 32), rgb(58, 58, 50),
+         rgb(230, 226, 210), rgb(146, 143, 128), rgb(92, 90, 80), rgb(205, 178, 110), rgb(126, 184, 98),
+         rgb(222, 156, 72), rgb(212, 94, 82), rgb(108, 164, 214), rgb(170, 128, 214), rgb(0, 0, 0, 150)},
+        {"OLED", rgb(0, 0, 0), rgb(0, 0, 0), rgb(12, 12, 12), rgb(32, 32, 30), rgb(20, 20, 20), rgb(46, 46, 44),
+         rgb(236, 236, 232), rgb(150, 150, 146), rgb(90, 90, 88), rgb(205, 178, 110), rgb(120, 200, 100),
+         rgb(230, 160, 70), rgb(230, 90, 80), rgb(100, 170, 230), rgb(175, 130, 225), rgb(0, 0, 0, 180)},
+        {"Catppuccin Mocha", rgb(24, 24, 37), rgb(17, 17, 27), rgb(30, 30, 46), rgb(69, 71, 90), rgb(49, 50, 68),
+         rgb(69, 71, 90), rgb(205, 214, 244), rgb(166, 173, 200), rgb(108, 112, 134), rgb(203, 166, 247),
+         rgb(166, 227, 161), rgb(250, 179, 135), rgb(243, 139, 168), rgb(137, 180, 250), rgb(180, 190, 254),
+         rgb(17, 17, 27, 170)},
+        {"Catppuccin Latte", rgb(230, 233, 239), rgb(220, 224, 232), rgb(239, 241, 245), rgb(204, 208, 218),
+         rgb(220, 224, 232), rgb(172, 176, 190), rgb(76, 79, 105), rgb(108, 111, 133), rgb(156, 160, 176),
+         rgb(136, 57, 239), rgb(64, 160, 43), rgb(254, 100, 11), rgb(210, 15, 57), rgb(30, 102, 245),
+         rgb(114, 135, 253), rgb(239, 241, 245, 210)},
+        {"Light", rgb(236, 236, 232), rgb(248, 248, 245), rgb(250, 250, 247), rgb(222, 222, 212), rgb(238, 238, 232),
+         rgb(205, 205, 195), rgb(30, 30, 28), rgb(95, 95, 88), rgb(150, 150, 140), rgb(166, 124, 30),
+         rgb(46, 140, 50), rgb(200, 110, 20), rgb(200, 50, 45), rgb(30, 110, 190), rgb(120, 70, 190),
+         rgb(255, 255, 255, 210)},
+        {"Nord", rgb(46, 52, 64), rgb(39, 44, 54), rgb(59, 66, 82), rgb(76, 86, 106), rgb(67, 76, 94), rgb(76, 86, 106),
+         rgb(236, 239, 244), rgb(176, 186, 202), rgb(120, 130, 150), rgb(136, 192, 208), rgb(163, 190, 140),
+         rgb(208, 135, 112), rgb(191, 97, 106), rgb(129, 161, 193), rgb(180, 142, 173), rgb(30, 34, 42, 170)},
+        {"Dracula", rgb(33, 34, 44), rgb(25, 26, 33), rgb(40, 42, 54), rgb(68, 71, 90), rgb(52, 55, 70), rgb(68, 71, 90),
+         rgb(248, 248, 242), rgb(170, 175, 200), rgb(98, 114, 164), rgb(189, 147, 249), rgb(80, 250, 123),
+         rgb(255, 184, 108), rgb(255, 85, 85), rgb(139, 233, 253), rgb(255, 121, 198), rgb(20, 20, 28, 170)},
+        {"Gruvbox", rgb(29, 32, 33), rgb(22, 24, 25), rgb(40, 40, 40), rgb(80, 73, 69), rgb(50, 48, 47), rgb(80, 73, 69),
+         rgb(235, 219, 178), rgb(189, 174, 147), rgb(124, 111, 100), rgb(250, 189, 47), rgb(184, 187, 38),
+         rgb(254, 128, 25), rgb(251, 73, 52), rgb(131, 165, 152), rgb(211, 134, 155), rgb(0, 0, 0, 160)},
+        {"Solarized", rgb(0, 43, 54), rgb(0, 36, 46), rgb(7, 54, 66), rgb(20, 75, 90), rgb(10, 60, 72), rgb(30, 85, 100),
+         rgb(238, 232, 213), rgb(147, 161, 161), rgb(88, 110, 117), rgb(181, 137, 0), rgb(133, 153, 0),
+         rgb(203, 75, 22), rgb(220, 50, 47), rgb(38, 139, 210), rgb(108, 113, 196), rgb(0, 20, 26, 170)},
+        {"Tokyo Night", rgb(26, 27, 38), rgb(22, 22, 30), rgb(31, 35, 53), rgb(52, 59, 88), rgb(36, 40, 59),
+         rgb(59, 66, 97), rgb(192, 202, 245), rgb(154, 165, 206), rgb(86, 95, 137), rgb(122, 162, 247),
+         rgb(158, 206, 106), rgb(255, 158, 100), rgb(247, 118, 142), rgb(125, 207, 255), rgb(187, 154, 247),
+         rgb(16, 16, 22, 170)},
+        {"Rose Pine", rgb(25, 23, 36), rgb(21, 19, 31), rgb(31, 29, 46), rgb(64, 61, 82), rgb(38, 35, 58),
+         rgb(64, 61, 82), rgb(224, 222, 244), rgb(144, 140, 170), rgb(110, 106, 134), rgb(246, 193, 119),
+         rgb(156, 207, 216), rgb(235, 188, 186), rgb(235, 111, 146), rgb(86, 148, 175), rgb(196, 167, 231),
+         rgb(16, 14, 24, 170)},
+        {"Woodland", rgb(18, 22, 16), rgb(24, 30, 22), rgb(28, 35, 25), rgb(48, 60, 42), rgb(36, 45, 32),
+         rgb(60, 74, 52), rgb(222, 228, 206), rgb(150, 160, 130), rgb(92, 104, 80), rgb(176, 196, 96),
+         rgb(126, 190, 98), rgb(222, 170, 72), rgb(212, 94, 82), rgb(120, 170, 200), rgb(170, 140, 210),
+         rgb(0, 0, 0, 150)},
+        {"High contrast", rgb(0, 0, 0), rgb(0, 0, 0), rgb(0, 0, 0), rgb(48, 48, 0), rgb(26, 26, 26), rgb(255, 255, 255),
+         rgb(255, 255, 255), rgb(225, 225, 225), rgb(165, 165, 165), rgb(255, 215, 0), rgb(0, 255, 100),
+         rgb(255, 160, 0), rgb(255, 70, 70), rgb(80, 200, 255), rgb(220, 140, 255), rgb(0, 0, 0, 210)},
+    };
+    return list;
+}
+
+int themeIndex(const std::string &name) {
+    const auto &list = themes();
+    for (int i = 0; i < (int)list.size(); i++)
+        if (name == list[i].name)
+            return i;
+    return 0;
+}
+
+void applyTheme(int idx) {
+    const auto &list = themes();
+    const Theme &t = list[idx >= 0 && idx < (int)list.size() ? idx : 0];
+    col::bg = t.bg;
+    col::bgTop = t.bgTop;
+    col::panel = t.panel;
+    col::panelHi = t.panelHi;
+    col::cell = t.cell;
+    col::line = t.line;
+    col::text = t.text;
+    col::dim = t.dim;
+    col::faint = t.faint;
+    col::accent = t.accent;
+    col::good = t.good;
+    col::warn = t.warn;
+    col::bad = t.bad;
+    col::info = t.info;
+    col::violet = t.violet;
+    col::shadow = t.shadow;
+}

@@ -185,6 +185,18 @@ Quest guides and pictures come from the [Escape from Tarkov Wiki](https://escape
 
 <br clear="right">
 
+## Kappa
+
+<img src="docs/screenshots/kappa.jpg" alt="Kappa collector tab">
+
+Every item the Collector quest asks for, with icons and flea and trader prices. Mark an item with A once you've found it in raid. The list is saved, and Y shows all items, only the ones still needed, or only the found ones. The top bar counts Collector items and the quests the Kappa container needs (after a TarkovTracker sync). When TarkovTracker says Collector is done, everything shows as found.
+
+## Themes
+
+<img src="docs/screenshots/themes.jpg" alt="Theme picker">
+
+Settings > Theme opens a picker with 13 themes: Tarkov, OLED, Catppuccin Mocha and Latte, Light, Nord, Dracula, Gruvbox, Solarized, Tokyo Night, Rose Pine, Woodland and High contrast. Each card previews the theme's palette. Moving over a theme previews it across the whole app, A keeps it and B goes back. Map overlays stay dark on light themes so they remain readable over the map art.
+
 ## Profile and TarkovTracker sync
 
 <table>
@@ -202,7 +214,7 @@ Quest guides and pictures come from the [Escape from Tarkov Wiki](https://escape
 2. In the app, open Settings, choose the token row and enter the token.
 3. The app syncs right away and on every launch (you can turn that off).
 
-TarkovTracker's API is read-only for the hideout. Sync replaces the app's hideout progress with what TarkovTracker has, and changes you make in the app stay on the Switch until the next sync overwrites them.
+TarkovTracker's API is read-only for the hideout, so sync merges: levels and item counts from TarkovTracker are added to yours, and anything you set in the app is kept, even when TarkovTracker has no hideout progress. Use X on the Stations tab to undo a level.
 
 ## Controls
 
@@ -245,6 +257,10 @@ Switch buttons. On PC, see [PC second screen](#pc-second-screen) for the mouse a
 | Quest page | Right stick, ZL / ZR | Scroll the guide |
 | Quest page | Y | Cycle guide + details, guide only, details only |
 | Profile | A / X | Refresh / change profile ID |
+| Kappa | D-pad | Pick an item |
+| Kappa | A | Mark found / unmark |
+| Kappa | Y | Show all, still needed or found |
+| Theme picker | D-pad, A / B | Preview a theme, keep it / cancel |
 
 ## How the data works
 

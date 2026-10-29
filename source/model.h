@@ -167,6 +167,8 @@ struct State {
     std::string lastSync;
     std::string account;
     std::string profileId;  // tarkov.dev account id
+    std::string theme;      // Theme name, empty for the default
+    std::set<std::string> kappaFound;  // Collector items handed in or set aside, by item id
 
     // Number of consecutive levels built from level 1.
     int builtLevel(const Station &st) const;
@@ -242,7 +244,11 @@ bool loadState(const std::string &path, State &st);
 bool saveState(const std::string &path, const State &st);
 
 // Applies a TarkovTracker /progress response to the local state.
-bool applyTrackerProgress(const std::string &text, const HideoutData &data, State &st, std::string &err);
+// Merges TarkovTracker progress into st: built levels and item counts only ever go up, so levels set in the
+// app survive a sync when TarkovTracker has less (or no hideout progress). trackerLevels is how many built
+// levels TarkovTracker reported.
+bool applyTrackerProgress(const std::string &text, const HideoutData &data, State &st, int &trackerLevels,
+                          std::string &err);
 
 bool parseMaps(const std::string &text, std::vector<MapInfo> &out, std::string &err);
 
