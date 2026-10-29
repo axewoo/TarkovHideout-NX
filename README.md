@@ -1,13 +1,13 @@
 <div align="center">
 
-# Tarkov Hideout for Switch
+# Tarkov Hideout for Switch and PC
 
-**An offline Escape From Tarkov companion for Nintendo Switch homebrew.**
-Hideout planner, craft timers, sharp interactive maps, an ammo chart and a quest database, in your hands between raids.
+**An offline Escape From Tarkov companion for Nintendo Switch homebrew, Windows and Linux.**
+Hideout planner, craft timers, sharp interactive maps, an ammo chart and a quest database, in your hands between raids or on your second screen while you play.
 
 ![Maps, ammo chart, quest guide and hideout stations](docs/screenshots/hero.jpg)
 
-[Install](#install) · [Hideout](#hideout) · [Maps](#maps) · [Ammo](#ammo) · [Database](#database) · [Profile and sync](#profile-and-tarkovtracker-sync) · [Controls](#controls) · [Building](#building)
+[Install](#install) · [PC](#pc-second-screen) · [Hideout](#hideout) · [Maps](#maps) · [Ammo](#ammo) · [Database](#database) · [Profile and sync](#profile-and-tarkovtracker-sync) · [Controls](#controls) · [Building](#building)
 
 </div>
 
@@ -21,15 +21,65 @@ Hideout planner, craft timers, sharp interactive maps, an ammo chart and a quest
 - **An ammo tab** with an eft-ammo style damage vs penetration chart. Pin rounds to compare them.
 - **Quest database** with wiki guides, pictures included, next to objectives, map pins and rewards.
 - **Works fully offline.** Data, icons, maps and wiki pictures ship inside the app and refresh daily when you're online.
+- **Runs on your PC too.** The same app for Windows and Linux, in a resizable window for a second screen, with mouse, keyboard or controller.
 - **Never talks to Battlestate's servers.** Game data comes from [tarkov.dev](https://tarkov.dev), and you can pull your progress from [TarkovTracker](https://tarkovtracker.org).
 
 ## Install
+
+### Switch
 
 1. Download `TarkovHideout.nro` from the [latest release](../../releases/latest).
 2. Copy it to `sdmc:/switch/` on your SD card.
 3. Launch it from the Homebrew Menu. For the most memory, and for the on-screen keyboard, launch through title override (hold R while starting a game).
 
 Progress and settings are saved in `sdmc:/switch/TarkovHideout/`. The app is a few hundred MB because every map piece and wiki picture is bundled for offline use.
+
+### Windows
+
+1. Download `TarkovHideout-windows-x64.zip` from the [latest release](../../releases/latest).
+2. Unzip it anywhere and run `TarkovHideout.exe`. Nothing else to install.
+
+### Linux
+
+1. Download `TarkovHideout-linux-x64.tar.gz` from the [latest release](../../releases/latest) and extract it.
+2. Install SDL2 and curl if you don't have them. On Arch and CachyOS: `sudo pacman -S --needed sdl2 sdl2_ttf sdl2_image curl`. On Debian and Ubuntu: `sudo apt install libsdl2-2.0-0 libsdl2-ttf-2.0-0 libsdl2-image-2.0-0 libcurl4`.
+3. Run `./TarkovHideout`. `TarkovHideout.desktop` and `icon.png` are included for a menu entry.
+
+On PC, progress, settings and downloads are saved in `%APPDATA%\TarkovHideout` (Windows) or `~/.local/share/TarkovHideout` (Linux), so a new version can replace the old folder. Builds from the latest commit are also on the [Build desktop](../../actions/workflows/desktop.yml) workflow page, under Artifacts.
+
+## PC second screen
+
+The PC version is the same app with the same tabs, data and TarkovTracker sync, in a window you can put on a second monitor while you play. It scales to any size, keeps text and maps sharp at high resolutions, and reopens where you left it.
+
+<table>
+<tr>
+<td colspan="2"><img src="docs/screenshots/pc-map.jpg" alt="Customs on PC, zoomed in with the wheel"></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/pc-quest.jpg" alt="Quest page on PC"></td>
+<td width="50%"><img src="docs/screenshots/pc-ammo.jpg" alt="Ammo chart on PC"></td>
+</tr>
+</table>
+
+- **Mouse.** Click tabs, rows, the `< filter >` labels and the button hints at the bottom, which all work as buttons. Double-click a row for its main action: open a quest, start a craft, pin a round, or add one of a hideout item. The wheel scrolls lists and quest guides and zooms the map around the pointer. Drag to pan. Right-click goes back.
+- **Keyboard.** The hints at the bottom show keys instead of Switch buttons:
+
+  | Key | Action |
+  | --- | --- |
+  | 1 to 9 | Jump to a tab |
+  | Q / E, Tab | Previous / next tab |
+  | Arrows, Enter, Esc | Move, select, back |
+  | PgUp / PgDn | Same as ZL / ZR (floors, sections, levels) |
+  | X, Y | Same as the Switch buttons |
+  | Ctrl+F | Search |
+  | F | Fullscreen map |
+  | R | Game render / vector plan |
+  | F11 | Fullscreen window |
+  | Ctrl+Q | Quit |
+
+- **Controller.** Any controller works like the Switch pad, and the hints switch back to Switch buttons while you use it.
+
+Text boxes accept Ctrl+V, so you can paste your TarkovTracker token. It stays masked on screen apart from its last four characters, in case you stream the window.
 
 ## Hideout
 
@@ -135,6 +185,8 @@ TarkovTracker's API is read-only for the hideout. Sync replaces the app's hideou
 
 ## Controls
 
+Switch buttons. On PC, see [PC second screen](#pc-second-screen) for the mouse and keyboard.
+
 | Where | Button | Action |
 | --- | --- | --- |
 | Anywhere | L / R | Switch tab |
@@ -192,7 +244,18 @@ git clone --depth 1 -b data https://github.com/axewoo/TarkovHideout-NX data && r
 docker run --rm -v "$PWD":/src -w /src devkitpro/devkita64 make
 ```
 
-Built with libnx, SDL2 (ttf, image), libcurl and nlohmann/json.
+Desktop build, on Linux or MSYS2 UCRT64 on Windows (needs CMake, pkg-config, SDL2, SDL2_ttf, SDL2_image and libcurl):
+
+```sh
+cmake -S desktop -B build-desktop -DCMAKE_BUILD_TYPE=Release
+cmake --build build-desktop -j
+# data next to the program, or point TARKOV_DATA at a checkout of the data branch
+git clone --depth 1 -b data https://github.com/axewoo/TarkovHideout-NX build-desktop/data
+```
+
+The desktop build compiles the same sources with `desktop/nxshim.cpp` standing in for libnx. `.github/workflows/desktop.yml` builds the Windows zip and Linux tarball, data included, and attaches them to releases.
+
+Built with libnx, SDL2 (ttf, image), libcurl and nlohmann/json. The PC version uses the [Inter](https://github.com/rsms/inter) font (SIL OFL 1.1).
 
 ---
 
