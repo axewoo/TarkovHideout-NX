@@ -16,6 +16,7 @@
 #include <direct.h>
 #define chdir _chdir
 #else
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
