@@ -14,6 +14,7 @@
 inline float nxWheel() { return 0; }
 inline int nxTabKey() { return -1; }
 inline bool nxPointer(int &, int &) { return false; }
+inline bool nxTouchCancelled() { return false; }
 inline const std::string &nxButtonLabel(const std::string &b) { return b; }
 inline float nxUiScale() { return 1; }
 inline void nxWindowCreated(struct SDL_Window *, struct SDL_Renderer *) {}

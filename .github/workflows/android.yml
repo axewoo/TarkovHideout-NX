@@ -1,0 +1,57 @@
+name: Build Android
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Fetch SDL sources
+        run: sh android/fetch-deps.sh
+
+      - name: Bundle Lite data
+        run: |
+          A=android/app/src/main/assets
+          mkdir -p $A
+          cp desktop/font.otf desktop/icon.png $A/
+          git clone -q --depth 1 -b data "https://github.com/${{ github.repository }}" data-branch
+          python3 tools/bundle_lite.py data-branch $A/data
+
+      - name: Build
+        working-directory: android
+        run: gradle --no-daemon assembleRelease
+
+      - name: Package
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk TarkovHideout-android.apk
+          du -sh TarkovHideout-android.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TarkovHideout-android
+          path: TarkovHideout-android.apk
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: TarkovHideout-android.apk

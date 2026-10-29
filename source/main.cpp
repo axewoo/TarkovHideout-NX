@@ -182,7 +182,7 @@ struct Input {
             touchX = x;
             touchY = y;
             tapMoved = std::max(tapMoved, std::abs(x - tapStartX) + std::abs(y - tapStartY));
-        } else if (was && tapMoved < 12) {
+        } else if (was && !nxTouchCancelled() && tapMoved < 12) {
             bool again = now - lastTap < freq * 45 / 100 && std::abs(tapStartX - tapX) + std::abs(tapStartY - tapY) < 12;
             tapCount = again ? tapCount + 1 : 1;
             tapped = true;
@@ -460,6 +460,7 @@ private:
     float wheelAcc = 0;
     int wheelSteps = 0;   // pending Up/Down presses from the mouse wheel
     float wheelGuide = 0; // wiki guide lines to scroll
+    float dragAcc = 0;    // list rows dragged by touch
     void onTap(int x, int y, int w, int h, std::function<void(int)> fn) { hits.push_back({{x, y, w, h}, std::move(fn)}); }
     // Acts as if the buttons were pressed this frame.
     void press(u64 buttons) { in.down |= buttons; }
@@ -1572,6 +1573,19 @@ void App::pointerInput() {
             wheelAcc -= steps;
             wheelSteps = std::clamp(wheelSteps + steps, -30, 30);
         }
+    }
+    // Dragging a finger (or the mouse) over a list scrolls it like the wheel; maps pan instead.
+    if (in.touching && in.touchDY && !(tab == TAB_MAPS && mapPicked)) {
+        if (tab == TAB_DATABASE && openQuest >= 0 && questView != 2 && in.touchX < (questView == 1 ? 1264 : 624)) {
+            wheelGuide -= in.touchDY / 26.f;
+        } else {
+            dragAcc -= in.touchDY / (tab == TAB_MAPS ? 150.f : 46.f);
+            int steps = (int)dragAcc;
+            dragAcc -= steps;
+            wheelSteps = std::clamp(wheelSteps + steps, -30, 30);
+        }
+    } else if (!in.touching) {
+        dragAcc = 0;
     }
     if (wheelSteps != 0 && !wheelList()) {
         // Screens without a plain list (map picker, quest details, profile) get arrow presses.
