@@ -1,0 +1,71 @@
+plugins {
+    id 'com.android.application'
+}
+
+// One version number for every build: the Switch Makefile's.
+def appVersion = (file('../../Makefile').text =~ /APP_VERSION\s*:=\s*(\S+)/)[0][1]
+def parts = appVersion.tokenize('.').collect { it as int }
+
+android {
+    namespace 'io.github.axewoo.tarkovhideout'
+    compileSdk 34
+    // CI runners provide their newest NDK here; otherwise the Android plugin's default is used.
+    if (System.getenv('ANDROID_NDK_LATEST_HOME')) {
+        ndkPath System.getenv('ANDROID_NDK_LATEST_HOME')
+    }
+
+    defaultConfig {
+        applicationId 'io.github.axewoo.tarkovhideout'
+        minSdk 21
+        targetSdk 34
+        versionCode parts[0] * 10000 + parts[1] * 100 + parts[2]
+        versionName appVersion
+        externalNativeBuild {
+            cmake {
+                arguments '-DANDROID_STL=c++_shared'
+                abiFilters 'arm64-v8a', 'x86_64'
+            }
+        }
+    }
+
+    // A key kept in the repository on purpose: anyone building the app produces APKs that
+    // install over each other, so updating never means uninstalling and losing progress.
+    signingConfigs {
+        shared {
+            storeFile file('../tarkovhideout.keystore')
+            storePassword 'tarkovhideout'
+            keyAlias 'tarkovhideout'
+            keyPassword 'tarkovhideout'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.shared
+        }
+        debug {
+            signingConfig signingConfigs.shared
+        }
+    }
+
+    sourceSets {
+        main {
+            // SDLActivity and friends come straight from the SDL sources.
+            java.srcDirs += '../deps/SDL2/android-project/app/src/main/java'
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path 'jni/CMakeLists.txt'
+            version '3.22.1'
+        }
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
+}

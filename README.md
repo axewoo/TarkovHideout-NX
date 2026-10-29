@@ -1,13 +1,13 @@
 <div align="center">
 
-# Tarkov Hideout for Switch and PC
+# Tarkov Hideout for Switch, PC and Android
 
-**An offline Escape From Tarkov companion for Nintendo Switch homebrew, Windows and Linux.**
+**An offline Escape From Tarkov companion for Nintendo Switch homebrew, Windows, Linux and Android tablets.**
 Hideout planner, craft timers, sharp interactive maps, an ammo chart and a quest database, in your hands between raids or on your second screen while you play.
 
 ![Maps, ammo chart, quest guide and hideout stations](docs/screenshots/hero.jpg)
 
-[Install](#install) · [PC](#pc-second-screen) · [Hideout](#hideout) · [Maps](#maps) · [Ammo](#ammo) · [Database](#database) · [Profile and sync](#profile-and-tarkovtracker-sync) · [Controls](#controls) · [Building](#building)
+[Install](#install) · [PC](#pc-second-screen) · [Android](#android-tablets-and-chromebooks) · [Hideout](#hideout) · [Maps](#maps) · [Ammo](#ammo) · [Database](#database) · [Profile and sync](#profile-and-tarkovtracker-sync) · [Controls](#controls) · [Building](#building)
 
 </div>
 
@@ -22,6 +22,7 @@ Hideout planner, craft timers, sharp interactive maps, an ammo chart and a quest
 - **Quest database** with wiki guides, pictures included, next to objectives, map pins and rewards.
 - **Works fully offline.** Data, icons, maps and wiki pictures ship inside the app and refresh daily when you're online.
 - **Runs on your PC too.** The same app for Windows and Linux, in a resizable window for a second screen, with mouse, keyboard or controller.
+- **And on Android tablets and Chromebooks**, in landscape with touch controls.
 - **Never talks to Battlestate's servers.** Game data comes from [tarkov.dev](https://tarkov.dev), and you can pull your progress from [TarkovTracker](https://tarkovtracker.org).
 
 ## Install
@@ -34,10 +35,19 @@ Hideout planner, craft timers, sharp interactive maps, an ammo chart and a quest
 
 Progress and settings are saved in `sdmc:/switch/TarkovHideout/`. The app is a few hundred MB because every map piece and wiki picture is bundled for offline use.
 
+**Lite version.** `TarkovHideout-Lite.nro` is the same app in under 10 MB. It bundles the hideout, quest, ammo and item data, icons and map thumbnails, and downloads each map and wiki picture the first time you open it, then keeps it. Use it to save SD space if the Switch is usually online. Pick one of the two NROs; both use the same save folder.
+
 ### Windows
 
 1. Download `TarkovHideout-windows-x64.zip` from the [latest release](../../releases/latest).
 2. Unzip it anywhere and run `TarkovHideout.exe`. Nothing else to install.
+
+### Android, tablets and Chromebooks
+
+1. Download `TarkovHideout-android.apk` from the [latest release](../../releases/latest) on the device.
+2. Open it and allow installing from your browser or file manager when Android asks. On a Chromebook, Android apps must be turned on in Settings, and APKs from outside the Play Store need [developer mode or ADB](https://developer.android.com/topic/arc/development-environment).
+
+Android 5.0 or newer, ARM64 or x86_64. Like the Lite NRO it bundles the data and downloads maps and wiki pictures as you open them. See [Android](#android-tablets-and-chromebooks) for touch controls.
 
 ### Linux
 
@@ -80,6 +90,17 @@ The PC version is the same app with the same tabs, data and TarkovTracker sync, 
 - **Controller.** Any controller works like the Switch pad, and the hints switch back to Switch buttons while you use it.
 
 Text boxes accept Ctrl+V, so you can paste your TarkovTracker token. It stays masked on screen apart from its last four characters, in case you stream the window.
+
+## Android tablets and Chromebooks
+
+The Android app is the same program built for touch screens, and always runs in landscape at the Switch layout, scaled to the screen.
+
+- **Tap** tabs, rows, the `< filter >` labels and the button hints at the bottom. **Double-tap** a row for its main action.
+- **Drag** to scroll lists and quest guides, and to pan maps. **Pinch** to zoom maps.
+- The Android **Back** button or gesture goes back. Text boxes open the on-screen keyboard and have OK and Cancel buttons.
+- A keyboard, mouse or controller works like on PC, for example on a Chromebook.
+
+Progress and downloads stay in the app's private storage and are kept across updates. The APK is signed with a key that is published in this repository, so any build from here installs over the previous one.
 
 ## Hideout
 
@@ -253,7 +274,16 @@ cmake --build build-desktop -j
 git clone --depth 1 -b data https://github.com/axewoo/TarkovHideout-NX build-desktop/data
 ```
 
-The desktop build compiles the same sources with `desktop/nxshim.cpp` standing in for libnx. `.github/workflows/desktop.yml` builds the Windows zip and Linux tarball, data included, and attaches them to releases.
+Android build (needs JDK 17, Gradle 8.7, and the Android SDK with NDK and CMake 3.22.1):
+
+```sh
+sh android/fetch-deps.sh   # SDL2, SDL2_ttf and SDL2_image sources
+mkdir -p android/app/src/main/assets && cp desktop/font.otf desktop/icon.png android/app/src/main/assets/
+python3 tools/bundle_lite.py data android/app/src/main/assets/data   # data: a checkout of the data branch
+cd android && gradle assembleRelease
+```
+
+The desktop build compiles the same sources with `desktop/nxshim.cpp` standing in for libnx. `.github/workflows/desktop.yml` builds the Windows zip and Linux tarball, data included, and attaches them to releases. On Android, Java's HTTP client takes the place of libcurl, and `.github/workflows/android.yml` builds the APK. `tools/bundle_lite.py` picks the files the Lite NRO and the APK bundle.
 
 Built with libnx, SDL2 (ttf, image), libcurl and nlohmann/json. The PC version uses the [Inter](https://github.com/rsms/inter) font (SIL OFL 1.1).
 
@@ -270,7 +300,7 @@ This app's own code is under the [MIT License](LICENSE). The data, pictures and 
 **Software**
 
 - [libnx](https://github.com/switchbrew/libnx) (ISC) and the devkitPro toolchain, for the Switch build.
-- [SDL2](https://libsdl.org), SDL2_ttf and SDL2_image (zlib license).
+- [SDL2](https://libsdl.org), SDL2_ttf and SDL2_image (zlib license). The Android app also includes [HarfBuzz](https://harfbuzz.github.io) (MIT) and stb_image (public domain).
 - [libcurl](https://curl.se) (curl license), [nlohmann/json](https://github.com/nlohmann/json) (MIT, included in `include/nlohmann`).
 - Portions of this software are copyright © The [FreeType](https://freetype.org) Project. All rights reserved.
 - This software is based in part on the work of the Independent JPEG Group (libjpeg-turbo), and uses libpng.

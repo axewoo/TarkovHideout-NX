@@ -36,7 +36,15 @@ bool gDownThisPump = false;  // a click shorter than a frame still shows as one 
 bool gReleasePending = false;
 int gMouseX = 0, gMouseY = 0;
 bool gMouseIn = false;
-bool gKeyboardLast = true;
+// What the player used last decides how the button hints are labelled.
+enum InputMode { MODE_KEYS, MODE_PAD, MODE_TOUCH };
+#ifdef __ANDROID__
+InputMode gMode = MODE_TOUCH;
+#else
+InputMode gMode = MODE_KEYS;
+#endif
+bool gPinching = false;        // two fingers on the screen: zoom, no dragging or tapping
+bool gTouchCancelled = false;
 std::vector<SDL_GameController *> gPads;
 std::vector<char> gFont;
 bool gSwallow = false;  // keys still held from the text box are not new presses
@@ -46,6 +54,9 @@ Uint32 gWindowSaved = 0;
 const char *kWindowFile = "window.cfg";
 
 void saveWindow() {
+#ifdef __ANDROID__
+    return;
+#endif
     if (!gWindow)
         return;
     Uint32 flags = SDL_GetWindowFlags(gWindow);
@@ -72,8 +83,12 @@ bool ctrl() {
 }
 
 void handleKey(const SDL_KeyboardEvent &k) {
-    gKeyboardLast = true;
     SDL_Keycode key = k.keysym.sym;
+    if (key == SDLK_AC_BACK) {
+        gInjected |= HidNpadButton_B;
+        return;
+    }
+    gMode = MODE_KEYS;
     if (key == SDLK_F11 || (key == SDLK_RETURN && (k.keysym.mod & KMOD_ALT))) {
         bool full = SDL_GetWindowFlags(gWindow) & SDL_WINDOW_FULLSCREEN_DESKTOP;
         SDL_SetWindowFullscreen(gWindow, full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
@@ -103,7 +118,7 @@ void pump() {
         case SDL_QUIT: gQuit = true; break;
         case SDL_KEYDOWN: handleKey(e.key); break;
         case SDL_MOUSEWHEEL:
-            gKeyboardLast = true;
+            gMode = MODE_KEYS;
 #if SDL_VERSION_ATLEAST(2, 0, 18)
             gWheel += e.wheel.preciseY * (e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1 : 1);
 #else
@@ -111,7 +126,9 @@ void pump() {
 #endif
             break;
         case SDL_MOUSEBUTTONDOWN:
-            gKeyboardLast = true;
+            gMode = e.button.which == SDL_TOUCH_MOUSEID ? MODE_TOUCH : MODE_KEYS;
+            if (gPinching && e.button.which == SDL_TOUCH_MOUSEID)
+                break;
             gMouseX = e.button.x;
             gMouseY = e.button.y;
             if (e.button.button == SDL_BUTTON_LEFT)
@@ -128,6 +145,8 @@ void pump() {
             }
             break;
         case SDL_MOUSEMOTION:
+            if (gPinching && e.motion.which == SDL_TOUCH_MOUSEID)
+                break;
             gMouseX = e.motion.x;
             gMouseY = e.motion.y;
             gMouseIn = true;
@@ -153,7 +172,25 @@ void pump() {
                     break;
                 }
             break;
-        case SDL_CONTROLLERBUTTONDOWN: gKeyboardLast = false; break;
+        case SDL_CONTROLLERBUTTONDOWN: gMode = MODE_PAD; break;
+        case SDL_FINGERDOWN:
+            // A new gesture starts with its first finger.
+            if (SDL_GetNumTouchFingers(e.tfinger.touchId) <= 1)
+                gPinching = false;
+            break;
+        case SDL_MULTIGESTURE:
+            // Pinch: zoom around the fingers instead of dragging with the first one.
+            if (e.mgesture.numFingers >= 2) {
+                if (!gPinching && gMouseDown)
+                    gTouchCancelled = true;
+                gPinching = true;
+                gMouseDown = false;
+                gWheel += e.mgesture.dDist * 14;
+                gMouseX = int(e.mgesture.x * 1280);
+                gMouseY = int(e.mgesture.y * 720);
+                gMouseIn = true;
+            }
+            break;
         default: break;
         }
     }
@@ -248,7 +285,7 @@ void padUpdate(PadState *pad) {
     if (sticks[0].y < -t) b |= HidNpadButton_StickLDown;
     if (std::abs(sticks[0].x) > 8000 || std::abs(sticks[0].y) > 8000 || std::abs(sticks[1].x) > 8000 ||
         std::abs(sticks[1].y) > 8000)
-        gKeyboardLast = false;
+        gMode = MODE_PAD;
     pad->sticks[0] = sticks[0];
     pad->sticks[1] = sticks[1];
     pad->buttons = b;
@@ -283,7 +320,55 @@ bool appletMainLoop() {
     return !gQuit;
 }
 
+#ifdef __ANDROID__
+// Unpacks the data bundled in the APK's assets (listed in data/files.txt) to internal storage
+// once per version, since the app reads it with normal file calls.
+static void unpackAssets(const std::string &dir) {
+    std::string stamp = dir + ".version";
+    std::ifstream in(stamp);
+    std::string have;
+    std::getline(in, have);
+    if (have == APP_VERSION)
+        return;
+    SDL_RWops *list = SDL_RWFromFile("data/files.txt", "rb");
+    if (!list)
+        return;
+    std::string names(size_t(SDL_RWsize(list)), '\0');
+    SDL_RWread(list, names.data(), 1, names.size());
+    SDL_RWclose(list);
+    std::istringstream ss(names);
+    std::string name;
+    while (std::getline(ss, name)) {
+        if (name.empty())
+            continue;
+        SDL_RWops *f = SDL_RWFromFile(("data/" + name).c_str(), "rb");
+        if (!f)
+            continue;
+        std::string body(size_t(SDL_RWsize(f)), '\0');
+        SDL_RWread(f, body.data(), 1, body.size());
+        SDL_RWclose(f);
+        std::string out = dir + name;
+        for (size_t i = out.find('/', 1); i != std::string::npos; i = out.find('/', i + 1))
+            mkdir(out.substr(0, i).c_str(), 0777);
+        std::ofstream(out, std::ios::binary | std::ios::trunc) << body;
+    }
+    std::ofstream(stamp, std::ios::trunc) << APP_VERSION << '\n';
+}
+#endif
+
 Result romfsInit() {
+    SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+#ifdef __ANDROID__
+    // Progress and downloads in the app's internal storage; the bundled data unpacked next to them.
+    std::string internal = SDL_AndroidGetInternalStoragePath() ? SDL_AndroidGetInternalStoragePath() : ".";
+    if (chdir(internal.c_str()) != 0)
+        std::fprintf(stderr, "Cannot use %s\n", internal.c_str());
+    gRomfs = internal + "/romfs/";
+    mkdir(gRomfs.c_str(), 0777);
+    unpackAssets(gRomfs);
+    return 0;
+#endif
     if (char *b = SDL_GetBasePath()) {
         gBase = b;
         SDL_free(b);
@@ -309,11 +394,14 @@ const std::string &nxRomfsRoot() {
 
 Result plGetSharedFontByType(PlFontData *font, PlSharedFontType) {
     if (gFont.empty()) {
+        // SDL's file calls also read Android assets, where gBase is empty.
         for (const std::string &p : {gBase + "font.otf", gRomfs + "../font.otf"}) {
-            std::ifstream f(p, std::ios::binary);
+            SDL_RWops *f = SDL_RWFromFile(p.c_str(), "rb");
             if (!f)
                 continue;
-            gFont.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+            gFont.resize(size_t(SDL_RWsize(f)));
+            SDL_RWread(f, gFont.data(), 1, gFont.size());
+            SDL_RWclose(f);
             break;
         }
         if (gFont.empty()) {
@@ -341,16 +429,29 @@ bool nxPointer(int &x, int &y) {
     return gMouseIn;
 }
 
+bool nxTouchCancelled() {
+    bool c = gTouchCancelled;
+    gTouchCancelled = false;
+    return c;
+}
+
 const std::string &nxButtonLabel(const std::string &button) {
+    // On a touch screen the hints are buttons named by what they do.
+    static const std::map<std::string, std::string> kTouch = {
+        {"A", "OK"},         {"B", "Back"},       {"L", "<"},      {"R", ">"},     {"ZL/ZR", "Prev/Next"},
+        {"ZL", "Prev"},      {"ZR", "Next"},      {"+", "Quit"},   {"-", "Full"},  {"R3", "Style"},
+        {"</>", "←/→"}, {"^/v", "↑/↓"}, {">", "→"}, {"A/X", "+/-"}, {"R-stick", "Drag"},
+    };
     static const std::map<std::string, std::string> kKeys = {
         {"A", "Enter"},      {"B", "Esc"},        {"L", "Q"},     {"R", "E"},     {"ZL/ZR", "PgUp/PgDn"},
         {"ZL", "PgUp"},      {"ZR", "PgDn"},      {"+", "Ctrl+Q"}, {"-", "F"},    {"R3", "R"},
         {"</>", "←/→"}, {"^/v", "↑/↓"}, {">", "→"}, {"A/X", "Wheel"}, {"R-stick", "Wheel"},
     };
-    if (!gKeyboardLast)
+    if (gMode == MODE_PAD)
         return button;
-    auto it = kKeys.find(button);
-    return it == kKeys.end() ? button : it->second;
+    const auto &names = gMode == MODE_TOUCH ? kTouch : kKeys;
+    auto it = names.find(button);
+    return it == names.end() ? button : it->second;
 }
 
 float nxUiScale() {
@@ -371,6 +472,9 @@ void nxWindowCreated(SDL_Window *window, SDL_Renderer *renderer) {
         SDL_SetWindowIcon(window, icon);
         SDL_FreeSurface(icon);
     }
+#ifdef __ANDROID__
+    return;
+#endif
     std::ifstream in(kWindowFile);
     int x, y, w, h, max;
     if (in >> x >> y >> w >> h >> max) {
@@ -458,6 +562,9 @@ Result swkbdShow(SwkbdConfig *c, char *out, size_t outSize) {
 
     std::string text = c->initial;
     bool done = false, ok = false;
+    // High on the screen so an on-screen keyboard leaves it visible; OK and Cancel are tappable.
+    const int bx = 190, by = 70, bw = 900, bh = 230;
+    const SDL_Rect okR{bx + bw - 288, by + bh - 66, 120, 46}, cancelR{bx + bw - 156, by + bh - 66, 128, 46};
     SDL_StartTextInput();
     while (!done) {
         SDL_Event e;
@@ -504,10 +611,16 @@ Result swkbdShow(SwkbdConfig *c, char *out, size_t outSize) {
                     else if (e.cbutton.button == SDL_CONTROLLER_BUTTON_B)
                         done = true;
                     break;
-                case SDL_MOUSEBUTTONDOWN:
-                    if (e.button.button == SDL_BUTTON_RIGHT)
+                case SDL_MOUSEBUTTONDOWN: {
+                    SDL_Point pt{e.button.x, e.button.y};
+                    if (e.button.button == SDL_BUTTON_RIGHT || SDL_PointInRect(&pt, &cancelR))
                         done = true;
+                    else if (SDL_PointInRect(&pt, &okR))
+                        ok = done = true;
+                    else if (SDL_IsTextInputShown() == SDL_FALSE)
+                        SDL_StartTextInput();  // tapping the box brings the touch keyboard back
                     break;
+                }
                 default: break;
                 }
             } while (!done && SDL_PollEvent(&e));
@@ -523,7 +636,6 @@ Result swkbdShow(SwkbdConfig *c, char *out, size_t outSize) {
         SDL_RenderSetClipRect(gRenderer, nullptr);
         SDL_SetRenderDrawColor(gRenderer, col::bg.r, col::bg.g, col::bg.b, 255);
         SDL_RenderClear(gRenderer);
-        const int bx = 190, by = 230, bw = 900, bh = 230;
         fillRect(bx, by, bw, bh, col::panel);
         fillRect(bx, by, bw, 3, col::accent);
         txt.draw(bx + 28, by + 22, c->header, col::accent);
@@ -539,7 +651,13 @@ Result swkbdShow(SwkbdConfig *c, char *out, size_t outSize) {
         txt.draw(bx + 40, by + 110, shown, col::text);
         if (SDL_GetTicks() / 500 % 2 == 0)
             fillRect(bx + 42 + txt.width(shown), by + 110, 2, 28, col::text);
-        txt.draw(bx + 28, by + 172, "Enter  OK      Esc  Cancel      Ctrl+V  Paste      Ctrl+Backspace  Clear", col::dim);
+#ifndef __ANDROID__
+        txt.draw(bx + 28, by + 176, "Ctrl+V  Paste     Ctrl+Backspace  Clear", col::dim);
+#endif
+        fillRect(okR.x, okR.y, okR.w, okR.h, col::accent);
+        txt.draw(okR.x + (okR.w - txt.width("OK")) / 2, okR.y + 9, "OK", col::bg);
+        fillRect(cancelR.x, cancelR.y, cancelR.w, cancelR.h, col::cell);
+        txt.draw(cancelR.x + (cancelR.w - txt.width("Cancel")) / 2, cancelR.y + 9, "Cancel", col::text);
         SDL_RenderPresent(gRenderer);
     }
     SDL_StopTextInput();

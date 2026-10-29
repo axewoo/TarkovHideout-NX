@@ -127,6 +127,7 @@ const std::string &nxRomfsRoot();
 float nxWheel();                // wheel notches since the last pad update, up is positive
 int nxTabKey();                 // tab picked with a number key this update, -1 if none
 bool nxPointer(int &x, int &y); // mouse position in the 1280 x 720 layout
+bool nxTouchCancelled();        // the touch that just ended turned into a pinch, so it is no tap
 // Keyboard name for a Switch button label when the keyboard was used last.
 const std::string &nxButtonLabel(const std::string &button);
 float nxUiScale();              // window pixels per layout pixel

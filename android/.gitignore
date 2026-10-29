@@ -1,0 +1,7 @@
+deps/
+.gradle/
+build/
+app/build/
+app/.cxx/
+app/src/main/assets/
+local.properties
