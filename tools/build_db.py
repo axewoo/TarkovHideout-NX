@@ -274,7 +274,8 @@ class Db:
 
         items = {}
         for iid, it in self.items.items():
-            if "preset" in (it.get("types") or []):
+            # Presets only matter where a quest gives or asks for one (weapon rewards).
+            if "preset" in (it.get("types") or []) and iid not in self.used:
                 continue
             hb = (it.get("handbookCategories") or [None])[0]
             cat = (self.handbook.get(b.ref_id(hb)) or {}).get("name") if isinstance(self.handbook, dict) else None
