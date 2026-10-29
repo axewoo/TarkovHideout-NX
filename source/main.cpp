@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdio>
 #include <ctime>
+#include <deque>
 #include <fstream>
 #include <functional>
 #include <map>
@@ -86,6 +87,118 @@ static void makeParents(const std::string &path) {
     for (size_t i = path.find('/', 1); i != std::string::npos; i = path.find('/', i + 1))
         mkdir(path.substr(0, i).c_str(), 0777);
 }
+
+// Fetches map pieces and guide pictures that the app does not bundle (Lite builds, Android) on a
+// background thread, saving each under APP_DIR, so the screen keeps moving while they arrive.
+// The newest request goes first, since it is what is on screen now.
+class Fetcher {
+public:
+    enum State { NONE, PENDING, DONE, FAILED };
+
+    void start() {
+        lock = SDL_CreateMutex();
+        wake = SDL_CreateCond();
+        if (lock && wake)
+            thread = SDL_CreateThreadWithStackSize(run, "fetch", 512 * 1024, this);
+    }
+
+    void stop() {
+        if (!thread)
+            return;
+        SDL_LockMutex(lock);
+        quit = true;
+        SDL_CondSignal(wake);
+        SDL_UnlockMutex(lock);
+        SDL_WaitThread(thread, nullptr);
+        thread = nullptr;
+    }
+
+    State state(const std::string &path) {
+        SDL_LockMutex(lock);
+        auto it = states.find(path);
+        State st = it == states.end() ? NONE : it->second;
+        SDL_UnlockMutex(lock);
+        return st;
+    }
+
+    // Queues a download unless one is known; gives up right away after repeated network errors.
+    State request(const std::string &path) {
+        if (!thread)
+            return FAILED;
+        SDL_LockMutex(lock);
+        State st;
+        auto it = states.find(path);
+        if (it != states.end()) {
+            st = it->second;
+        } else if (netFails >= 3) {
+            st = FAILED;
+        } else {
+            st = states[path] = PENDING;
+            todo.push_front(path);
+            // Pieces that scrolled away long ago are dropped; they are asked for again if seen.
+            while (todo.size() > 48) {
+                states.erase(todo.back());
+                todo.pop_back();
+            }
+            SDL_CondSignal(wake);
+        }
+        SDL_UnlockMutex(lock);
+        return st;
+    }
+
+    // Forgets queued requests and what is known, for a new map or after the data was replaced.
+    void reset() {
+        if (!thread)
+            return;
+        SDL_LockMutex(lock);
+        todo.clear();
+        states.clear();
+        netFails = 0;
+        SDL_UnlockMutex(lock);
+    }
+
+private:
+    static int run(void *self) {
+        static_cast<Fetcher *>(self)->loop();
+        netThreadExit();
+        return 0;
+    }
+
+    void loop() {
+        SDL_LockMutex(lock);
+        while (!quit) {
+            if (todo.empty()) {
+                SDL_CondWait(wake, lock);
+                continue;
+            }
+            std::string path = todo.front();
+            todo.pop_front();
+            SDL_UnlockMutex(lock);
+            HttpResult r = httpGet(DATA_URL + path, {}, &quit);
+            std::string file = std::string(APP_DIR "/") + path;
+            bool ok = r.ok && r.status == 200;
+            if (ok) {
+                makeParents(file);
+                ok = writeFile(file, r.body);
+            }
+            SDL_LockMutex(lock);
+            // A reset while downloading forgot this path; the file is kept either way.
+            auto it = states.find(path);
+            if (it != states.end())
+                it->second = ok ? DONE : FAILED;
+            netFails = r.ok ? 0 : netFails + 1;
+        }
+        SDL_UnlockMutex(lock);
+    }
+
+    SDL_mutex *lock = nullptr;
+    SDL_cond *wake = nullptr;
+    SDL_Thread *thread = nullptr;
+    std::atomic<bool> quit{false};
+    std::deque<std::string> todo;
+    std::map<std::string, State> states;
+    int netFails = 0;
+};
 
 static std::string groupDigits(int64_t n) {
     std::string s = std::to_string(n);
@@ -328,7 +441,7 @@ private:
     const MapInfo *currentMap() const { return maps.empty() ? nullptr : &maps[mapSel % maps.size()]; }
     bool ensureMapTexture();
     bool ensureFloorTexture();
-    std::string mapFile(const MapInfo &m, const std::string &image, bool quiet);
+    std::string mapFile(const std::string &image, bool fetch, bool *pending = nullptr);
     void openMap(int idx);
     void inputMapPicker();
     void drawMapPicker();
@@ -387,9 +500,11 @@ private:
     };
     std::map<std::string, Chunk> mapChunks;
     std::set<std::string> chunkMissing;
-    int mapFrame = 0, chunkLoads = 0, chunkNetFails = 0;
+    Fetcher fetcher;  // pieces and pictures that are neither bundled nor saved yet
+    int mapFrame = 0, chunkLoads = 0;
     uint32_t mapFrameStart = 0;
     bool mapFailed = false;
+    bool mapPending = false;  // the map image is downloading
     float mapZoom = 1, mapU = 0.5f, mapV = 0.5f;
     int markerFilter = -1;  // -1 = all, else MarkerType
     int markerSel = -1;     // index into visibleMarkers()
@@ -437,7 +552,6 @@ private:
     int textScroll = 0;
     int questView = 0; // 0 guide + details, 1 guide only, 2 details only
     std::map<std::string, SDL_Texture *> wikiPics; // guide pictures of the open quest; null = unavailable
-    bool wikiFetched = false;                      // one picture download per frame keeps scrolling responsive
     std::vector<QRow> qrows;
     int qrowSel = -1;
     int qrowScroll = 0;
@@ -477,6 +591,7 @@ bool App::init() {
     plInitialize(PlServiceType_User);
     socketInitializeDefault();
     netInit();
+    fetcher.start();
     mkdir(APP_DIR, 0777);
     mkdir(APP_DIR "/maps", 0777);
     mkdir(APP_DIR "/wiki", 0777);
@@ -503,6 +618,7 @@ bool App::init() {
 void App::shutdown() {
     save();
     freeMapTiles();
+    fetcher.stop();
     ui.shutdown();
     netExit();
     socketExit();
@@ -1160,37 +1276,43 @@ bool App::ensureMapTexture() {
     if (!m)
         return false;
     const std::string &image = mapPlan && !m->alt.empty() ? m->alt : m->image;
-    if (!mapTiles.empty() && mapTexId == image)
+    if (mapTexId != image) {
+        freeMapTiles();
+        mapTexId = image;
+        mapFailed = false;
+    }
+    mapPending = false;
+    if (!mapTiles.empty())
         return true;
-    if (mapFailed && mapTexId == image)
+    if (mapFailed)
         return false;
-    freeMapTiles();
-    mapTexId = image;
-    mapFailed = false;
-    std::string path = mapFile(*m, image, false);
+    std::string path = mapFile(image, true, &mapPending);
+    if (mapPending)
+        return false;
     if (!path.empty() && !ui.loadImageTiles(path, kMapTile, mapTiles, mapImgW, mapImgH))
         setStatus("Not enough memory for the " + m->name + " map", col::bad);
     mapFailed = mapTiles.empty();
     return !mapFailed;
 }
 
-// Finds a map image on the SD card or in romfs, downloading it once if neither has it.
-std::string App::mapFile(const MapInfo &m, const std::string &image, bool quiet) {
+// Finds a map image on the SD card or in romfs. With fetch, one that neither has is downloaded
+// in the background and saved for offline use: "" with *pending set until it has arrived, and
+// "" alone when it is unavailable.
+std::string App::mapFile(const std::string &image, bool fetch, bool *pending) {
+    if (pending)
+        *pending = false;
+    Fetcher::State state = fetch ? fetcher.state(image) : Fetcher::NONE;
+    if (state == Fetcher::PENDING) {
+        *pending = true;
+        return "";
+    }
     std::string sd = std::string(APP_DIR "/") + image;
-    if (fileExists(sd))
+    if (state == Fetcher::DONE || fileExists(sd))
         return sd;
     if (fileExists(ROMFS_ROOT + image))
         return ROMFS_ROOT + image;
-    if (quiet)
-        return "";
-    busy("Downloading " + m.name + " map...");
-    HttpResult r = httpGet(DATA_URL + image);
-    makeParents(sd);
-    if (r.ok && r.status == 200 && writeFile(sd, r.body)) {
-        setStatus(m.name + " map saved for offline use", col::good);
-        return sd;
-    }
-    setStatus("Could not download the " + m.name + " map", col::bad);
+    if (fetch && fetcher.request(image) == Fetcher::PENDING)
+        *pending = true;
     return "";
 }
 
@@ -1202,11 +1324,14 @@ bool App::ensureFloorTexture() {
     const std::string &image = mapPlan && !f.alt.empty() ? f.alt : f.image;
     if (floorTexId == image)
         return !floorTiles.empty();
+    bool pending;
+    std::string path = mapFile(image, true, &pending);
+    if (pending)
+        return false;
     for (SDL_Texture *t : floorTiles)
         SDL_DestroyTexture(t);
     floorTiles.clear();
     floorTexId = image;
-    std::string path = mapFile(*m, image, false);
     if (!path.empty())
         ui.loadImageTiles(path, kMapTile, floorTiles, floorImgW, floorImgH);
     return !floorTiles.empty();
@@ -1224,7 +1349,7 @@ void App::openMap(int idx) {
 // A desktop window can show more of a sharp level at once and has the memory for it.
 static const int kMaxChunks = nxDesktop() ? 160 : 32;
 
-// A sharp piece from the SD card or romfs, downloaded silently when neither has it.
+// A sharp piece from the SD card or romfs, downloaded in the background when neither has it.
 // Returns nullptr when it is not ready yet (try again next frame) or does not exist.
 SDL_Texture *App::mapChunk(const std::string &path) {
     auto it = mapChunks.find(path);
@@ -1234,23 +1359,19 @@ SDL_Texture *App::mapChunk(const std::string &path) {
     }
     if (chunkMissing.count(path) || (chunkLoads > 0 && SDL_GetTicks() - mapFrameStart > 12))
         return nullptr;
+    // Still downloading: checked before the file system, which is slow on the SD card.
+    Fetcher::State fetch = fetcher.state(path);
+    if (fetch == Fetcher::PENDING)
+        return nullptr;
     chunkLoads++;
-    std::string file = ROMFS_ROOT + path;
-    if (!fileExists(file)) {
-        file = std::string(APP_DIR "/") + path;
+    std::string file = std::string(APP_DIR "/") + path;
+    if (fetch != Fetcher::DONE) {
+        file = ROMFS_ROOT + path;
         if (!fileExists(file)) {
-            HttpResult r;
-            if (chunkNetFails < 3)
-                r = httpGet(DATA_URL + path);
-            if (!r.ok || r.status != 200) {
-                if (!r.ok)
-                    chunkNetFails++;
-                chunkMissing.insert(path);
-                return nullptr;
-            }
-            makeParents(file);
-            if (!writeFile(file, r.body)) {
-                chunkMissing.insert(path);
+            file = std::string(APP_DIR "/") + path;
+            if (!fileExists(file)) {
+                if (fetcher.request(path) == Fetcher::FAILED)
+                    chunkMissing.insert(path);
                 return nullptr;
             }
         }
@@ -1279,7 +1400,7 @@ void App::freeChunks() {
         SDL_DestroyTexture(kv.second.tex);
     mapChunks.clear();
     chunkMissing.clear();
-    chunkNetFails = 0;
+    fetcher.reset();
 }
 
 void App::freeMapTiles() {
@@ -1878,19 +1999,16 @@ SDL_Texture *App::wikiPicture(const std::string &path, bool &missing) {
         missing = !it->second;
         return it->second;
     }
+    Fetcher::State fetch = fetcher.state(path);
+    if (fetch == Fetcher::PENDING)
+        return nullptr; // still downloading
     std::string sd = std::string(APP_DIR "/") + path, file;
-    if (fileExists(sd))
+    if (fetch == Fetcher::DONE || fileExists(sd))
         file = sd;
     else if (fileExists(ROMFS_ROOT + path))
         file = ROMFS_ROOT + path;
-    else if (wikiFetched)
-        return nullptr; // try next frame
-    else {
-        wikiFetched = true;
-        HttpResult r = httpGet(DATA_URL + path);
-        if (r.ok && r.status == 200 && writeFile(sd, r.body))
-            file = sd;
-    }
+    else if (fetcher.request(path) == Fetcher::PENDING)
+        return nullptr;
     SDL_Texture *t = file.empty() ? nullptr : ui.loadImage(file);
     wikiPics[path] = t;
     missing = !t;
@@ -2473,7 +2591,7 @@ void App::drawMapPicker() {
         ui.fill(x, y, cw, ch, on ? col::panelHi : col::panel);
         auto it = mapThumbs.find(m.thumb);
         if (it == mapThumbs.end() && !m.thumb.empty()) {
-            std::string path = mapFile(m, m.thumb, true);
+            std::string path = mapFile(m.thumb, false);
             it = mapThumbs.emplace(m.thumb, path.empty() ? nullptr : ui.loadImage(path)).first;
         }
         if (it != mapThumbs.end() && it->second) {
@@ -2539,14 +2657,18 @@ void App::drawMaps() {
             drawLevels(fplan ? f.alt : f.image, fplan ? f.altLevels : f.levels, mapImgW, ox, oy, dw, dh, top, bottom);
         }
     } else {
-        ui.text(40, top + 80, "Map image unavailable offline. Connect to download it once.", FS_BODY, col::dim);
+        ui.text(40, top + 80,
+                mapPending ? "Downloading the " + m->name + " map..." :
+                             "Map image unavailable offline. Connect to download it once.",
+                FS_BODY, col::dim);
     }
 
     auto vis = visibleMarkers();
     int selIdx = markerSel >= 0 && markerSel < (int)vis.size() ? vis[markerSel] : -1;
     float r = std::clamp(4.f + mapZoom * 1.5f, 6.f, 12.f);
     for (int pass = 0; pass < 2; pass++) {
-        for (int i : vis) {
+        for (int pos = 0; pos < (int)vis.size(); pos++) {
+            int i = vis[pos];
             const MapMarker &mk = m->markers[i];
             bool sel = i == selIdx;
             if ((pass == 1) != sel)
@@ -2554,7 +2676,6 @@ void App::drawMaps() {
             float x = ox + mk.u * dw, y = oy + mk.v * dh;
             float rr = sel ? r + 4 : r;
             if (pass == 0 && y >= top && y < bottom) {
-                int pos = std::find(vis.begin(), vis.end(), i) - vis.begin();
                 int hr = int(rr) + 6;
                 onTap(int(x) - hr, int(y) - hr, hr * 2, hr * 2, [this, pos](int) { markerSel = pos; });
             }
@@ -3139,7 +3260,6 @@ void App::drawQuest() {
         y = top + 12;
         SDL_Rect clipG{16, top + 4, gw, lines * 26 + 8};
         ui.clip(&clipG);
-        wikiFetched = false;
         // A picture that starts above the first visible row still shows its lower part.
         if (textScroll < (int)questText.size() && questText[textScroll] == "@cont") {
             int j = textScroll;

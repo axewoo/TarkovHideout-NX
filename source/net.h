@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -12,5 +13,9 @@ struct HttpResult {
 
 void netInit();
 void netExit();
+// Frees the calling thread's connection; call it before a download thread ends.
+void netThreadExit();
 
-HttpResult httpGet(const std::string &url, const std::vector<std::string> &headers = {});
+// cancel, when given and set from another thread, stops the transfer early.
+HttpResult httpGet(const std::string &url, const std::vector<std::string> &headers = {},
+                   const std::atomic<bool> *cancel = nullptr);

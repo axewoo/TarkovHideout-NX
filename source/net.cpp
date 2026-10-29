@@ -9,8 +9,9 @@
 
 void netInit() {}
 void netExit() {}
+void netThreadExit() {}
 
-HttpResult httpGet(const std::string &url, const std::vector<std::string> &headers) {
+HttpResult httpGet(const std::string &url, const std::vector<std::string> &headers, const std::atomic<bool> *) {
     HttpResult res;
     JNIEnv *env = static_cast<JNIEnv *>(SDL_AndroidGetJNIEnv());
     jobject activity = static_cast<jobject>(SDL_AndroidGetActivity());
@@ -78,21 +79,39 @@ static size_t writeCb(char *ptr, size_t size, size_t nmemb, void *user) {
     return size * nmemb;
 }
 
+// One handle per thread keeps its connection, and the TLS session with it, open between
+// requests, which saves a handshake for every map piece fetched from the same server.
+static thread_local CURL *threadCurl = nullptr;
+
+static int progressCb(void *cancel, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+    return static_cast<const std::atomic<bool> *>(cancel)->load() ? 1 : 0;
+}
+
 void netInit() {
     curl_global_init(CURL_GLOBAL_DEFAULT);
 }
 
+void netThreadExit() {
+    if (threadCurl)
+        curl_easy_cleanup(threadCurl);
+    threadCurl = nullptr;
+}
+
 void netExit() {
+    netThreadExit();
     curl_global_cleanup();
 }
 
-HttpResult httpGet(const std::string &url, const std::vector<std::string> &headers) {
+HttpResult httpGet(const std::string &url, const std::vector<std::string> &headers, const std::atomic<bool> *cancel) {
     HttpResult res;
-    CURL *curl = curl_easy_init();
+    if (!threadCurl)
+        threadCurl = curl_easy_init();
+    CURL *curl = threadCurl;
     if (!curl) {
         res.error = "curl init failed";
         return res;
     }
+    curl_easy_reset(curl);
     struct curl_slist *list = nullptr;
     for (const auto &h : headers)
         list = curl_slist_append(list, h.c_str());
@@ -111,6 +130,11 @@ HttpResult httpGet(const std::string &url, const std::vector<std::string> &heade
 #endif
     if (list)
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, list);
+    if (cancel) {
+        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progressCb);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, const_cast<std::atomic<bool> *>(cancel));
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    }
 
     CURLcode rc = curl_easy_perform(curl);
     if (rc == CURLE_OK) {
@@ -120,7 +144,6 @@ HttpResult httpGet(const std::string &url, const std::vector<std::string> &heade
         res.error = curl_easy_strerror(rc);
     }
     curl_slist_free_all(list);
-    curl_easy_cleanup(curl);
     return res;
 }
 #endif
