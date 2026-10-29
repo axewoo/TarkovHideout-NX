@@ -54,6 +54,9 @@ def fetch_bytes(url):
             if e.code == 404:
                 raise
             last = e
+            if e.code == 429:
+                # Rate limited (the wiki): back off longer than for network errors.
+                time.sleep(int(e.headers.get("Retry-After") or 0) or 15 * (attempt + 1))
         except Exception as e:  # noqa: BLE001 - retry anything network related
             last = e
         time.sleep(2 ** attempt)

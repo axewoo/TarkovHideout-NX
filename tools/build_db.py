@@ -319,7 +319,8 @@ class WikiImages(HTMLParser):
     def __init__(self):
         super().__init__()
         self.section = ""
-        self.heading = None
+        self.heading = None    # text of the heading being read, None outside headings
+        self.in_headline = False  # only the mw-headline span counts, not the "[edit | edit source]" links
         self.table_depth = 0
         self.images = {}  # section title -> [(key, url, caption)]
         self.seen = set()
@@ -330,6 +331,8 @@ class WikiImages(HTMLParser):
             self.table_depth += 1
         elif tag in ("h2", "h3"):
             self.heading = ""
+        elif tag == "span" and self.heading is not None and "mw-headline" in (a.get("class") or ""):
+            self.in_headline = True
         elif tag == "img" and not self.table_depth and self.heading is None:
             src = a.get("data-src") or a.get("src") or ""
             key = a.get("data-image-key")
@@ -347,14 +350,16 @@ class WikiImages(HTMLParser):
             self.images.setdefault(self.section, []).append((key, url, alt if " " in alt else ""))
 
     def handle_endtag(self, tag):
+        if tag == "span":
+            self.in_headline = False
         if tag == "table":
             self.table_depth = max(0, self.table_depth - 1)
         elif tag in ("h2", "h3") and self.heading is not None:
-            self.section = re.sub(r"\s+", " ", self.heading).replace("[edit]", "").strip()
+            self.section = re.sub(r"\s+", " ", self.heading).strip()
             self.heading = None
 
     def handle_data(self, data):
-        if self.heading is not None:
+        if self.in_headline:
             self.heading += data
 
 
@@ -464,7 +469,7 @@ def fetch_wiki(titles, out=None):
     from concurrent.futures import ThreadPoolExecutor
 
     titles = sorted(set(t for t in titles if t))
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=2) as pool:
         pages = {t: text for t, text in pool.map(lambda t: fetch_wiki_page(t, out), titles) if text}
     n_img = sum(text.count("\n@img ") + text.startswith("@img ") for text in pages.values())
     print(f"wiki: {len(pages)} pages for {len(titles)} titles ({sum(map(len, pages.values())) // 1024} KB), "
