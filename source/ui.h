@@ -8,24 +8,35 @@
 #include <unordered_map>
 #include <vector>
 
+// The active theme's colors; applyTheme() rewrites them.
 namespace col {
-constexpr SDL_Color bg{14, 15, 13, 255};
-constexpr SDL_Color bgTop{24, 25, 21, 255};
-constexpr SDL_Color panel{27, 28, 24, 255};
-constexpr SDL_Color panelHi{46, 46, 38, 255};
-constexpr SDL_Color cell{36, 37, 32, 255};
-constexpr SDL_Color line{58, 58, 50, 255};
-constexpr SDL_Color text{230, 226, 210, 255};
-constexpr SDL_Color dim{146, 143, 128, 255};
-constexpr SDL_Color faint{92, 90, 80, 255};
-constexpr SDL_Color accent{205, 178, 110, 255};
-constexpr SDL_Color good{126, 184, 98, 255};
-constexpr SDL_Color warn{222, 156, 72, 255};
-constexpr SDL_Color bad{212, 94, 82, 255};
-constexpr SDL_Color info{108, 164, 214, 255};
-constexpr SDL_Color violet{170, 128, 214, 255};
-constexpr SDL_Color shadow{0, 0, 0, 150};
+inline SDL_Color bg{14, 15, 13, 255};
+inline SDL_Color bgTop{24, 25, 21, 255};
+inline SDL_Color panel{27, 28, 24, 255};
+inline SDL_Color panelHi{46, 46, 38, 255};
+inline SDL_Color cell{36, 37, 32, 255};
+inline SDL_Color line{58, 58, 50, 255};
+inline SDL_Color text{230, 226, 210, 255};
+inline SDL_Color dim{146, 143, 128, 255};
+inline SDL_Color faint{92, 90, 80, 255};
+inline SDL_Color accent{205, 178, 110, 255};
+inline SDL_Color good{126, 184, 98, 255};
+inline SDL_Color warn{222, 156, 72, 255};
+inline SDL_Color bad{212, 94, 82, 255};
+inline SDL_Color info{108, 164, 214, 255};
+inline SDL_Color violet{170, 128, 214, 255};
+inline SDL_Color shadow{0, 0, 0, 150};
 } // namespace col
+
+struct Theme {
+    const char *name;
+    SDL_Color bg, bgTop, panel, panelHi, cell, line, text, dim, faint, accent, good, warn, bad, info, violet, shadow;
+};
+
+const std::vector<Theme> &themes();
+// Index of the theme with that name, 0 (the default) when there is none.
+int themeIndex(const std::string &name);
+void applyTheme(int idx);
 
 enum FontSize { FS_SMALL, FS_BODY, FS_TITLE, FS_COUNT };
 

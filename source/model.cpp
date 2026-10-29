@@ -343,6 +343,11 @@ bool loadState(const std::string &path, State &st) {
     st.lastSync = str(j, "lastSync");
     st.account = str(j, "account");
     st.profileId = str(j, "profileId");
+    st.theme = str(j, "theme");
+    st.kappaFound.clear();
+    for (const auto &k : j.value("kappaFound", json::array()))
+        if (k.is_string())
+            st.kappaFound.insert(k.get<std::string>());
     st.modules.clear();
     st.parts.clear();
     st.timers.clear();
@@ -376,6 +381,8 @@ bool saveState(const std::string &path, const State &st) {
     j["lastSync"] = st.lastSync;
     j["account"] = st.account;
     j["profileId"] = st.profileId;
+    j["theme"] = st.theme;
+    j["kappaFound"] = st.kappaFound;
     json mods = json::object();
     for (auto &[k, v] : st.modules)
         if (v)
@@ -405,7 +412,8 @@ bool saveState(const std::string &path, const State &st) {
     return std::rename(tmp.c_str(), path.c_str()) == 0;
 }
 
-bool applyTrackerProgress(const std::string &text, const HideoutData &data, State &st, std::string &err) {
+bool applyTrackerProgress(const std::string &text, const HideoutData &data, State &st, int &trackerLevels,
+                          std::string &err) {
     json j = json::parse(text, nullptr, false);
     if (j.is_discarded() || !j.is_object()) {
         err = "TarkovTracker sent invalid JSON";
@@ -422,11 +430,12 @@ bool applyTrackerProgress(const std::string &text, const HideoutData &data, Stat
             for (const auto &r : l.items)
                 reqCount[r.id] = r.count;
 
-    st.modules.clear();
-    st.parts.clear();
+    trackerLevels = 0;
     for (const auto &m : d.value("hideoutModulesProgress", json::array()))
-        if (m.value("complete", false))
+        if (m.value("complete", false)) {
             st.modules[str(m, "id")] = true;
+            trackerLevels++;
+        }
     for (const auto &p : d.value("hideoutPartsProgress", json::array())) {
         std::string id = str(p, "id");
         int count = num(p, "count");
@@ -435,7 +444,8 @@ bool applyTrackerProgress(const std::string &text, const HideoutData &data, Stat
             if (it != reqCount.end() && it->second > count)
                 count = it->second;
         }
-        if (count > 0)
+        auto have = st.parts.find(id);
+        if (count > 0 && (have == st.parts.end() || count > have->second))
             st.parts[id] = count;
     }
     st.tasksDone.clear();
