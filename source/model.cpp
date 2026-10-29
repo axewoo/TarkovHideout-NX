@@ -363,7 +363,12 @@ bool loadState(const std::string &path, State &st) {
     st.profileId = str(j, "profileId");
     st.theme = str(j, "theme");
     st.hideLocked = j.value("hideLocked", false);
+    st.tasksLocal.clear();
+    for (const auto &t : j.value("tasksLocal", json::array()))
+        if (t.is_string())
+            st.tasksLocal.insert(t.get<std::string>());
     st.playerLevel = num(j, "playerLevel");
+    st.faction = str(j, "faction");
     st.kappaFound.clear();
     for (const auto &k : j.value("kappaFound", json::array()))
         if (k.is_string())
@@ -403,7 +408,9 @@ bool saveState(const std::string &path, const State &st) {
     j["profileId"] = st.profileId;
     j["theme"] = st.theme;
     j["hideLocked"] = st.hideLocked;
+    j["tasksLocal"] = st.tasksLocal;
     j["playerLevel"] = st.playerLevel;
+    j["faction"] = st.faction;
     j["kappaFound"] = st.kappaFound;
     json mods = json::object();
     for (auto &[k, v] : st.modules)
@@ -474,7 +481,10 @@ bool applyTrackerProgress(const std::string &text, const HideoutData &data, Stat
     for (const auto &t : d.value("tasksProgress", json::array()))
         if (t.value("complete", false))
             st.tasksDone.insert(str(t, "id"));
+    st.tasksDone.insert(st.tasksLocal.begin(), st.tasksLocal.end());
     st.account = str(d, "displayName");
+    if (!str(d, "pmcFaction").empty())
+        st.faction = str(d, "pmcFaction");
     if (num(d, "playerLevel") > 0)
         st.playerLevel = num(d, "playerLevel");
     return true;

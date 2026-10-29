@@ -171,8 +171,10 @@ struct State {
     std::string profileId;  // tarkov.dev account id
     std::string theme;      // Theme name, empty for the default
     std::set<std::string> kappaFound;  // Collector items handed in or set aside, by item id
+    std::set<std::string> tasksLocal;  // quests marked done in the app; kept across syncs
     bool hideLocked = false;           // hide quests the player can't take yet (needs a sync)
-    int playerLevel = 0;               // from TarkovTracker, 0 when unknown
+    int playerLevel = 0;
+    std::string faction;               // "USEC" or "BEAR" from TarkovTracker, empty when unknown               // from TarkovTracker, 0 when unknown
 
     // Number of consecutive levels built from level 1.
     int builtLevel(const Station &st) const;

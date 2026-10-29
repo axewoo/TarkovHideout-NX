@@ -533,6 +533,9 @@ private:
     void inputDatabase();
     void inputAmmo();
     void inputQuest();
+    std::vector<int> questsBefore(int idx) const;
+    void markQuests(const std::vector<int> &idx, bool done);
+    std::string questAction(int idx) const;
     void inputProfile();
     void inputSettings();
 
@@ -2627,11 +2630,106 @@ void App::buildQuestRows(const Quest &q) {
         item(u.item, 0, "unlocked at " + u.trader + " LL" + std::to_string(u.level));
 }
 
+// Every quest that has to be done before this one, following prerequisites all the way back.
+std::vector<int> App::questsBefore(int idx) const {
+    std::map<std::string, std::vector<int>> byName;
+    for (int i = 0; i < (int)db.quests.size(); i++)
+        byName[db.quests[i].name].push_back(i);
+    std::set<int> seen;
+    std::vector<int> todo = {idx}, out;
+    while (!todo.empty()) {
+        int i = todo.back();
+        todo.pop_back();
+        for (const auto &p : db.quests[i].prereqs) {
+            auto it = byName.find(p);
+            if (it == byName.end())
+                continue;
+            for (int k : it->second) {
+                // The other faction's version of a quest isn't yours to complete.
+                const std::string &fac = db.quests[k].faction;
+                if (!fac.empty() && !st.faction.empty() && lower(fac) != lower(st.faction))
+                    continue;
+                if (k != idx && seen.insert(k).second) {
+                    out.push_back(k);
+                    todo.push_back(k);
+                }
+            }
+        }
+    }
+    return out;
+}
+
+// What X does on the quest page: finish the chain before it, then the quest itself, then undo.
+std::string App::questAction(int idx) const {
+    const Quest &q = db.quests[idx];
+    for (int k : questsBefore(idx))
+        if (!st.tasksDone.count(db.quests[k].id))
+            return "I'm on this one";
+    return st.tasksDone.count(q.id) ? "Mark not done" : "Mark done";
+}
+
+// Marks quests done or not here, then tells TarkovTracker when the token may write.
+void App::markQuests(const std::vector<int> &idx, bool done) {
+    if (idx.empty())
+        return;
+    nlohmann::json body = nlohmann::json::array();
+    for (int i : idx) {
+        const std::string &id = db.quests[i].id;
+        if (done) {
+            st.tasksDone.insert(id);
+            st.tasksLocal.insert(id);
+        } else {
+            st.tasksDone.erase(id);
+            st.tasksLocal.erase(id);
+        }
+        body.push_back({{"id", id}, {"state", done ? "completed" : "uncompleted"}});
+    }
+    dbDirty = true;
+    save();
+    std::string what = std::to_string(idx.size()) + (idx.size() == 1 ? " quest" : " quests") +
+                       (done ? " marked done" : " marked not done");
+    if (st.token.empty()) {
+        setStatus(what + " in the app", col::good);
+        return;
+    }
+    busy("Updating TarkovTracker...");
+    std::vector<std::string> headers = {"Authorization: Bearer " + st.token, "Accept: application/json",
+                                        "Content-Type: application/json"};
+    HttpResult r = httpPost(TRACKER_API "/progress/tasks", headers, body.dump());
+    if (r.ok && r.status == 404) {
+        // Older servers only take one quest per call.
+        for (const auto &t : body) {
+            r = httpPost(TRACKER_API "/progress/task/" + t["id"].get<std::string>(), headers,
+                         nlohmann::json{{"state", t["state"]}}.dump());
+            if (!r.ok || r.status >= 300)
+                break;
+        }
+    }
+    if (r.ok && r.status >= 200 && r.status < 300)
+        setStatus(what + " here and on TarkovTracker", col::good);
+    else if (r.ok && (r.status == 401 || r.status == 403))
+        setStatus(what + " in the app. For TarkovTracker, make a token with Write Progression", col::warn);
+    else
+        setStatus(what + " in the app. TarkovTracker: " + (r.ok ? "HTTP " + std::to_string(r.status) : r.error),
+                  col::warn);
+}
+
 void App::inputQuest() {
     const Quest &q = db.quests[openQuest];
     if (in.pressed(HidNpadButton_B)) {
         openQuest = -1;
         dropWikiPictures();
+        return;
+    }
+    if (in.pressed(HidNpadButton_X)) {
+        std::vector<int> before;
+        for (int k : questsBefore(openQuest))
+            if (!st.tasksDone.count(db.quests[k].id))
+                before.push_back(k);
+        if (!before.empty())
+            markQuests(before, true);
+        else
+            markQuests({openQuest}, !st.tasksDone.count(q.id));
         return;
     }
     if (in.pressed(HidNpadButton_Y)) {
@@ -4085,7 +4183,7 @@ void App::drawQuest() {
     // Right (or full width): structured details.
     static const char *kViewNames[3] = {"Guide + details", "Guide only", "Details only"};
     if (questView == 1) {
-        drawFooter({{"B", "Back"}, {"Y", kViewNames[2]}, {"^/v", "Scroll"}, {"ZL/ZR", "Page"}});
+        drawFooter({{"B", "Back"}, {"X", questAction(openQuest)}, {"Y", kViewNames[2]}, {"^/v", "Scroll"}, {"ZL/ZR", "Page"}});
         return;
     }
     int rx = questView == 2 ? 16 : kW / 2, rw = questView == 2 ? kW - 32 : kW / 2 - 16;
@@ -4217,7 +4315,8 @@ void App::drawQuest() {
 
     bool hasPins = qrowSel >= 0 && qrows[qrowSel].kind == QRow::OBJ && !q.objectives[qrows[qrowSel].obj].pins.empty();
     bool onItem = qrowSel >= 0 && qrows[qrowSel].kind == QRow::ITEM;
-    std::vector<std::pair<std::string, std::string>> hints = {{"B", "Back"}, {"Y", kViewNames[(questView + 1) % 3]}};
+    std::vector<std::pair<std::string, std::string>> hints = {
+        {"B", "Back"}, {"X", questAction(openQuest)}, {"Y", kViewNames[(questView + 1) % 3]}};
     if (hasPins)
         hints.push_back({"A", "Show on map"});
     if (onItem)

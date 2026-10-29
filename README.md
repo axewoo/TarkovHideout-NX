@@ -215,11 +215,13 @@ Settings > Theme opens a picker with 13 themes: Tarkov, OLED, Catppuccin Mocha a
 
 **TarkovTracker sync**
 
-1. On tarkovtracker.org, open Settings and create an API token with the **Get Progression** permission. Tokens are tied to a game mode, so make a PVE token if you play PVE.
+1. On tarkovtracker.org, open Settings and create an API token with the **Get Progression** permission (add **Write Progression** to let the app mark quests done for you). Tokens are tied to a game mode, so make a PVE token if you play PVE.
 2. In the app, open Settings, choose the token row and enter the token.
 3. The app syncs right away and on every launch (you can turn that off).
 
-**Quest progress from the game.** The app never reads the game, but [TarkovMonitor](https://github.com/the-hideout/TarkovMonitor) can: it runs on the gaming PC, watches the game's logs and ticks quests on TarkovTracker as you accept and finish them, and the app picks them up on its next sync. TarkovMonitor only sees quests from the moment it runs, so tick the ones you had already finished, and set your level, on tarkovtracker.org once.
+**Quest progress from the game.** The app never reads the game, but [TarkovMonitor](https://github.com/the-hideout/TarkovMonitor) can: it runs on the gaming PC, watches the game's logs and ticks quests on TarkovTracker as you accept and finish them, and the app picks them up on its next sync. TarkovMonitor only sees quests from the moment it runs, so the ones you finished before need catching up once.
+
+**Catching up in a few presses.** Open a quest you currently have active in game and press X ("I'm on this one"): every quest before it in its chain is marked done. Do that for each active quest and your history is filled in. With a token that has the **Write Progression** permission, the app sends the same changes to TarkovTracker, so you never tick them one by one on the website. X again marks the quest itself done, then not done. Set your level on tarkovtracker.org once too.
 
 **Hide quests I can't take yet** (Settings, or - on the quest list) needs a sync. A quest counts as locked while a quest before it isn't done, or your level is below what it asks. Your level is the higher of TarkovTracker's and your tarkov.dev profile's. Trader loyalty isn't synced anywhere, so loyalty requirements are shown but don't lock.
 
@@ -266,6 +268,7 @@ Switch buttons. On PC, see [PC second screen](#pc-second-screen) for the mouse a
 | Quests | - | Show or hide locked quests (after a sync) |
 | Database | A | Open quest, show key lock on the map |
 | Quest page | Up / Down, A | Pick an objective or item, show it on the map |
+| Quest page | X | Mark every earlier quest done ("I'm on this one"), then this one, then undo |
 | Quest page | Right stick, ZL / ZR | Scroll the guide |
 | Quest page | Y | Cycle guide + details, guide only, details only |
 | Profile | A / X | Refresh / change profile ID |
