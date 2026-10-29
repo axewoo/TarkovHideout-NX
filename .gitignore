@@ -1,0 +1,7 @@
+build/
+*.nro
+*.nacp
+*.elf
+*.map
+romfs/*.json
+__pycache__/

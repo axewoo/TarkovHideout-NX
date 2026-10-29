@@ -1,0 +1,37 @@
+name: Update hideout data
+
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [tools/build_data.py, .github/workflows/data.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build compact data from tarkov.dev
+        run: python tools/build_data.py out
+
+      - name: Publish to the data branch
+        # The app reads raw.githubusercontent.com/<repo>/data/hideout-<mode>.json.
+        # Each run replaces the branch so it never accumulates history.
+        run: |
+          cd out
+          git init -q -b data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add *.json
+          git commit -qm "Hideout data $(date -u +%F)"
+          git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" data
