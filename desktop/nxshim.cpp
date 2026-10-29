@@ -617,7 +617,7 @@ Result swkbdShow(SwkbdConfig *c, char *out, size_t outSize) {
                         done = true;
                     else if (SDL_PointInRect(&pt, &okR))
                         ok = done = true;
-                    else if (SDL_IsTextInputShown() == SDL_FALSE)
+                    else
                         SDL_StartTextInput();  // tapping the box brings the touch keyboard back
                     break;
                 }
