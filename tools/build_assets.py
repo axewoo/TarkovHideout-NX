@@ -258,9 +258,6 @@ def markers(gm, proj, rect, mobs):
     out = []
     for e in gm.get("extracts") or []:
         p = uv(zone(e))
-        if gm.get("normalizedName") == "icebreaker":
-            print(f"    icebreaker extract {e.get('name')}: position {e.get('position')} "
-                  f"outline {len(e.get('outline') or [])} pts -> {p}")
         if p:
             out.append({"t": {"pmc": "pmc", "scav": "scav"}.get(e.get("faction"), "shared"),
                         "n": e.get("name") or "Extract", "u": p[0], "v": p[1]})
@@ -609,6 +606,16 @@ def build_maps(mode, out, loaded=None):
                     f["img"], f["r"], f["lv"] = f.pop("alt"), f.pop("ar"), f.pop("alv")
                 floors.append(f)
         mk = markers(gm, proj, rect, mobs)
+        # Icebreaker's helicopter extract is given where the helicopter hovers, off the ship;
+        # you extract from the helipad, the octagon at the far (bow) end of the Helipad level.
+        pad = next((f for f in floors if "helipad" in f["n"].lower() and "r" in f), None)
+        if pad:
+            r = pad["r"]
+            for m in mk:
+                if "heli" in m["n"].lower() and m["t"] in ("pmc", "scav", "shared"):
+                    top = m["v"] <= (r[1] + r[3]) / 2
+                    m["u"] = round((r[0] + r[2]) / 2, 4)
+                    m["v"] = round(r[1] + 0.07 * (r[3] - r[1]) if top else r[3] - 0.07 * (r[3] - r[1]), 4)
         entries.append({"id": key, "name": gm.get("name") or key, "img": styles[0]["img"], "lv": styles[0]["lv"],
                         "alt": styles[1]["img"] if len(styles) > 1 else "",
                         "alv": styles[1]["lv"] if len(styles) > 1 else [],
