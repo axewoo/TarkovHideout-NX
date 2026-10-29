@@ -2956,9 +2956,10 @@ void App::drawSettings() {
     if (settingsList.sel == SET_PICTURES) {
         int ny = kTop + SET_COUNT * 52 + 8;
         const char *warn[] = {
-            "Heads up: this makes about a thousand requests in a row. They go to this app's",
-            "GitHub copy of the pictures, never to the wiki, so Fandom does not see them.",
-            "GitHub can still rate limit you for a while if you repeat it often.",
+            "Heads up: this makes about a thousand downloads in a row.",
+            "They come from this app's GitHub copy of the pictures, never",
+            "from the wiki, so Fandom does not see them. GitHub can still",
+            "rate limit you for a while if you repeat it often.",
         };
         for (const char *w : warn) {
             ui.text(36, ny, w, FS_SMALL, col::bad, 780);
