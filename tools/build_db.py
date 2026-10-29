@@ -10,7 +10,6 @@ batches and stored in wiki.json.
 import json
 import re
 import sys
-import time
 import urllib.parse
 
 import build_assets as a
@@ -319,36 +318,28 @@ def clean_extract(text):
     return text
 
 
+def fetch_wiki_page(title):
+    # TextExtracts only returns one whole-page extract per request.
+    q = urllib.parse.urlencode({"action": "query", "prop": "extracts", "explaintext": 1, "redirects": 1,
+                                "format": "json", "titles": title})
+    try:
+        data = json.loads(a.fetch_bytes(f"{WIKI_API}?{q}"))
+    except Exception as e:  # noqa: BLE001 - the wiki is optional
+        print(f"  wiki {title} failed: {e}", file=sys.stderr)
+        return title, ""
+    for page in ((data.get("query") or {}).get("pages") or {}).values():
+        return title, clean_extract(page.get("extract"))
+    return title, ""
+
+
 def fetch_wiki(titles):
-    """Returns {title: cleaned text} for wiki pages, 20 per request."""
+    """Returns {title: cleaned text} for wiki pages."""
+    from concurrent.futures import ThreadPoolExecutor
+
     titles = sorted(set(t for t in titles if t))
-    out = {}
-    for i in range(0, len(titles), 20):
-        batch = titles[i:i + 20]
-        q = urllib.parse.urlencode({"action": "query", "prop": "extracts", "explaintext": 1, "exlimit": 20,
-                                    "redirects": 1, "format": "json", "titles": "|".join(batch)})
-        try:
-            data = json.loads(a.fetch_bytes(f"{WIKI_API}?{q}"))
-        except Exception as e:  # noqa: BLE001 - the wiki is optional
-            print(f"  wiki batch {i // 20} failed: {e}", file=sys.stderr)
-            continue
-        query = data.get("query") or {}
-        alias = {}
-        for kind in ("normalized", "redirects"):
-            for r in query.get(kind) or []:
-                alias[r.get("to")] = alias.get(r.get("from"), r.get("from"))
-        for page in (query.get("pages") or {}).values():
-            title = page.get("title")
-            text = clean_extract(page.get("extract"))
-            if not text:
-                continue
-            out[title] = text
-            src = title
-            while src in alias:
-                src = alias[src]
-                out[src] = text
-        time.sleep(0.5)
-    print(f"wiki: {len(out)} pages for {len(titles)} titles")
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        out = {t: text for t, text in pool.map(fetch_wiki_page, titles) if text}
+    print(f"wiki: {len(out)} pages for {len(titles)} titles ({sum(map(len, out.values())) // 1024} KB)")
     return out
 
 
