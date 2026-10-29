@@ -1826,6 +1826,11 @@ void App::inputSettings() {
             st.modules.clear();
             st.parts.clear();
             st.timers.clear();
+            // Quests marked in the app go too; TarkovTracker's own come back on the next sync.
+            for (const auto &id : st.tasksLocal)
+                st.tasksDone.erase(id);
+            st.tasksLocal.clear();
+            dbDirty = true;
             confirmReset = false;
             needDirty = true;
             save();
@@ -4459,7 +4464,7 @@ void App::drawSettings() {
         {"Interface zoom", std::to_string(nxZoom()) + "%   " + nxButtonLabel("</>")},
         {"Download latest data, icons and maps", data.empty() ? "no data" : data.generated},
         {"Download all wiki pictures", "for offline guides"},
-        {confirmReset ? "Clear local progress? Press A again" : "Clear local progress and timers", ""},
+        {confirmReset ? "Clear local progress? Press A again" : "Clear local progress, quests and timers", ""},
     };
     auto shown = settingRows();
     int n = shown.size();
