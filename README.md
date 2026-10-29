@@ -82,6 +82,7 @@ behind the game by a few days.
 | Maps | Up / Down | Filter marker type |
 | Maps | Y / B | Toggle labels / reset view |
 | Maps | - | Fullscreen map |
+| Maps | R3 (click right stick) | Switch between game render and vector plan |
 | Database | ZL / ZR | Switch section |
 | Database | Left / Right | Trader or caliber filter (page in Keys and Items) |
 | Database | Y / X | Search / clear search |

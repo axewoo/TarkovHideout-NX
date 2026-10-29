@@ -185,6 +185,7 @@ struct MapInfo {
     std::string id;
     std::string name;
     std::string image;  // path relative to the data root, e.g. maps/customs.jpg
+    std::string alt;    // optional second style (vector plan), same framing as image
     int w = 0, h = 0;
     int duration = 0;   // raid minutes
     std::string players;

@@ -1,6 +1,7 @@
 #include <switch.h>
 
 #include <sys/stat.h>
+#include <dirent.h>
 
 #include <algorithm>
 #include <cmath>
@@ -312,6 +313,7 @@ private:
     int mapImgW = 0, mapImgH = 0;
     std::string mapTexId;
     bool mapFull = false;
+    bool mapPlan = false; // show the vector plan instead of the game render
     bool mapFailed = false;
     float mapZoom = 1, mapU = 0.5f, mapV = 0.5f;
     int markerFilter = -1;  // -1 = all, else MarkerType
@@ -511,6 +513,14 @@ bool App::downloadData(bool quiet) {
             writeFile(std::string(APP_DIR "/") + file, f.body);
     }
     writeFile(std::string(APP_DIR "/") + name, r.body);
+    // Map images can change with the data; drop downloaded copies so they refetch on view.
+    if (DIR *dir = opendir(APP_DIR "/maps")) {
+        while (struct dirent *e = readdir(dir))
+            if (e->d_name[0] != '.')
+                remove((std::string(APP_DIR "/maps/") + e->d_name).c_str());
+        closedir(dir);
+    }
+    freeMapTiles();
     wikiLoaded = false;
     loadData();
     setStatus("Hideout data updated (" + data.generated + ")", col::good);
@@ -979,22 +989,23 @@ bool App::ensureMapTexture() {
     const MapInfo *m = currentMap();
     if (!m)
         return false;
-    if (!mapTiles.empty() && mapTexId == m->id)
+    const std::string &image = mapPlan && !m->alt.empty() ? m->alt : m->image;
+    if (!mapTiles.empty() && mapTexId == image)
         return true;
-    if (mapFailed && mapTexId == m->id)
+    if (mapFailed && mapTexId == image)
         return false;
     freeMapTiles();
-    mapTexId = m->id;
+    mapTexId = image;
     mapFailed = false;
-    std::string sd = std::string(APP_DIR "/") + m->image;
+    std::string sd = std::string(APP_DIR "/") + image;
     std::string path;
     if (fileExists(sd))
         path = sd;
-    else if (fileExists("romfs:/" + m->image))
-        path = "romfs:/" + m->image;
+    else if (fileExists("romfs:/" + image))
+        path = "romfs:/" + image;
     else {
         busy("Downloading " + m->name + " map...");
-        HttpResult r = httpGet(DATA_URL + m->image);
+        HttpResult r = httpGet(DATA_URL + image);
         if (r.ok && r.status == 200 && writeFile(sd, r.body)) {
             path = sd;
             setStatus(m->name + " map saved for offline use", col::good);
@@ -1048,6 +1059,8 @@ void App::inputMaps() {
         mapLabels = !mapLabels;
     if (in.pressed(HidNpadButton_Minus))
         mapFull = !mapFull;
+    if (in.pressed(HidNpadButton_StickR) && !currentMap()->alt.empty())
+        mapPlan = !mapPlan;
     if (in.pressed(HidNpadButton_B) && pinReturn) {
         // Came from a quest or key page: go back to it.
         pinReturn = false;
@@ -1959,10 +1972,15 @@ void App::drawMaps() {
     }
     ui.clip(nullptr);
 
+    std::vector<std::pair<std::string, std::string>> hints;
     if (pinReturn)
-        drawFooter({{"B", "Back"}, {"ZL/ZR", "Map"}, {"A/X", "Zoom"}, {"Y", "Labels"}, {"-", "Full"}});
+        hints = {{"B", "Back"}, {"ZL/ZR", "Map"}, {"A/X", "Zoom"}, {"Y", "Labels"}};
     else
-        drawFooter({{"ZL/ZR", "Map"}, {"</>", "Marker"}, {"^/v", "Filter"}, {"A/X", "Zoom"}, {"Y", "Labels"}, {"-", "Full"}});
+        hints = {{"ZL/ZR", "Map"}, {"</>", "Marker"}, {"^/v", "Filter"}, {"A/X", "Zoom"}, {"Y", "Labels"}};
+    if (!m->alt.empty())
+        hints.push_back({"R3", mapPlan ? "Render" : "Plan"});
+    hints.push_back({"-", "Full"});
+    drawFooter(hints);
 }
 
 

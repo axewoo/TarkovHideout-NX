@@ -460,6 +460,7 @@ bool parseMaps(const std::string &text, std::vector<MapInfo> &out, std::string &
         mi.id = str(m, "id");
         mi.name = str(m, "name");
         mi.image = str(m, "img");
+        mi.alt = str(m, "alt");
         mi.w = num(m, "w");
         mi.h = num(m, "h");
         mi.duration = num(m, "dur");

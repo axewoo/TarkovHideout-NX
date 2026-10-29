@@ -46,7 +46,7 @@ ROMFS		:=	romfs
 
 APP_TITLE   := Tarkov Hideout
 APP_AUTHOR  := axewoo
-APP_VERSION := 2.3.0
+APP_VERSION := 2.4.0
 
 #---------------------------------------------------------------------------------
 # options for code generation

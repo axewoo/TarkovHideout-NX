@@ -30,7 +30,7 @@ def main():
         get(f"hideout-{mode}.json", out)
         get(f"db-{mode}.json", out)
         maps = json.loads(get(f"maps-{mode}.json", out))
-        images.update(m["img"] for m in maps["maps"])
+        images.update(f for m in maps["maps"] for f in (m["img"], m.get("alt")) if f)
     get("wiki.json", out)
     pages = 0
     while True:

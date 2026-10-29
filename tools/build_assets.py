@@ -18,6 +18,7 @@ import re
 import sys
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 from PIL import Image
 
@@ -162,13 +163,19 @@ def render_tiles(meta, proj, rect):
     tx0, ty0 = math.floor(px0 / tile), math.floor(py0 / tile)
     tx1, ty1 = math.floor(px1 / tile), math.floor(py1 / tile)
     canvas = Image.new("RGB", ((tx1 - tx0 + 1) * tile, (ty1 - ty0 + 1) * tile), (27, 28, 24))
+
+    def fetch_tile(t):
+        url = meta["tilePath"].replace("{z}", str(zoom)).replace("{x}", str(t[0])).replace("{y}", str(t[1]))
+        try:
+            return t, Image.open(io.BytesIO(fetch_bytes(url))).convert("RGBA")
+        except Exception:  # noqa: BLE001 - tiles outside the map are missing
+            return t, None
+
     got = 0
-    for ty in range(ty0, ty1 + 1):
-        for tx in range(tx0, tx1 + 1):
-            url = meta["tilePath"].replace("{z}", str(zoom)).replace("{x}", str(tx)).replace("{y}", str(ty))
-            try:
-                img = Image.open(io.BytesIO(fetch_bytes(url))).convert("RGBA")
-            except Exception:  # noqa: BLE001 - tiles outside the map are missing
+    coords = [(tx, ty) for ty in range(ty0, ty1 + 1) for tx in range(tx0, tx1 + 1)]
+    with ThreadPoolExecutor(8) as pool:
+        for (tx, ty), img in pool.map(fetch_tile, coords):
+            if img is None:
                 continue
             if img.size != (tile, tile):
                 img = img.resize((tile, tile))
@@ -297,26 +304,39 @@ def build_maps(mode, out, loaded=None):
             continue
         proj = Projection(meta)
         rect = proj.rect(meta.get("svgBounds") or meta["bounds"])
-        img_file = f"maps/{img_key}.jpg"
-        path = os.path.join(out, img_file)
-        if not os.path.exists(path):
-            try:
-                img = render_svg(meta) if meta.get("svgPath") else render_tiles(meta, proj, rect)
-            except Exception as e:  # noqa: BLE001
-                print(f"  [{name}] {img_key} render failed: {e}", file=sys.stderr)
-                continue
-            # Leaflet stretches the image over the bounds, so match their aspect ratio.
-            aspect = (rect[2] - rect[0]) / (rect[3] - rect[1])
-            size = (MAP_PX, round(MAP_PX / aspect)) if aspect >= 1 else (round(MAP_PX * aspect), MAP_PX)
-            img = img.resize(size, Image.LANCZOS)
-            img.save(path, quality=85, optimize=True)
-        with Image.open(path) as im:
+        # The game render (tiles) is the main image where it exists; the vector plan is the
+        # alternative. Both cover the same rect, so markers line up on either.
+        styles = []
+        if meta.get("tilePath"):
+            styles.append(("render", f"maps/{img_key}.jpg", lambda: render_tiles(meta, proj, rect)))
+        if meta.get("svgPath"):
+            styles.append(("plan", f"maps/{img_key}{'-plan' if styles else ''}.jpg", lambda: render_svg(meta)))
+        files = []
+        for style, img_file, render in styles:
+            path = os.path.join(out, img_file)
+            if not os.path.exists(path):
+                try:
+                    img = render()
+                except Exception as e:  # noqa: BLE001
+                    print(f"  [{name}] {img_key} {style} render failed: {e}", file=sys.stderr)
+                    continue
+                # Leaflet stretches the image over the bounds, so match their aspect ratio.
+                aspect = (rect[2] - rect[0]) / (rect[3] - rect[1])
+                size = (MAP_PX, round(MAP_PX / aspect)) if aspect >= 1 else (round(MAP_PX * aspect), MAP_PX)
+                img = img.resize(size, Image.LANCZOS)
+                img.save(path, quality=85, optimize=True)
+            files.append(img_file)
+        if not files:
+            continue
+        img_file = files[0]
+        with Image.open(os.path.join(out, img_file)) as im:
             w, h = im.size
         mk = markers(gm, proj, rect, mobs)
-        entries.append({"id": key, "name": gm.get("name") or key, "img": img_file, "w": w, "h": h,
+        entries.append({"id": key, "name": gm.get("name") or key, "img": img_file,
+                        "alt": files[1] if len(files) > 1 else "", "w": w, "h": h,
                         "dur": gm.get("raidDuration") or 0, "players": gm.get("players") or "",
                         "markers": mk})
-        print(f"  [{name}] {key}: {img_file} {w}x{h}, {len(mk)} markers")
+        print(f"  [{name}] {key}: {', '.join(files)} {w}x{h}, {len(mk)} markers")
     order = ["ground-zero", "ground-zero-21", "factory", "night-factory", "customs", "woods", "shoreline",
              "interchange", "reserve", "lighthouse", "streets-of-tarkov", "the-lab", "the-lab-dark",
              "the-labyrinth", "terminal", "icebreaker"]
