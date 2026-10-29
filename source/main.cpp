@@ -271,6 +271,10 @@ private:
     void openQuestPage(int idx);
     void buildQuestRows(const Quest &q);
     void layoutQuest();
+    void drawGuidePicture(const std::string &line, int y);
+    std::vector<std::string> guideLines(const std::string &text, int width);
+    SDL_Texture *wikiPicture(const std::string &path, bool &missing);
+    void dropWikiPictures();
     void showPins(const std::string &label, const std::vector<Pin> &pins);
     std::string itemName(const std::string &id) const;
     int itemIcon(const std::string &id) const;
@@ -367,6 +371,8 @@ private:
     std::vector<std::string> questText;
     int textScroll = 0;
     int questView = 0; // 0 guide + details, 1 guide only, 2 details only
+    std::map<std::string, SDL_Texture *> wikiPics; // guide pictures of the open quest; null = unavailable
+    bool wikiFetched = false;                      // one picture download per frame keeps scrolling responsive
     std::vector<QRow> qrows;
     int qrowSel = -1;
     int qrowScroll = 0;
@@ -387,6 +393,7 @@ bool App::init() {
     netInit();
     mkdir(APP_DIR, 0777);
     mkdir(APP_DIR "/maps", 0777);
+    mkdir(APP_DIR "/wiki", 0777);
     in.init();
     if (!ui.init())
         return false;
@@ -1474,6 +1481,7 @@ void App::inputDatabase() {
 
 void App::openQuestPage(int idx) {
     ensureWiki();
+    dropWikiPictures();
     openQuest = idx;
     textScroll = 0;
     layoutQuest();
@@ -1493,8 +1501,85 @@ void App::layoutQuest() {
     std::string text = it != wiki.end() ? it->second : "";
     questText = text.empty() ? std::vector<std::string>{"No wiki guide cached for this quest.",
                                                           "Download the latest data in Settings to get the guides."}
-                             : ui.wrap(text, FS_SMALL, questView == 1 ? 1200 : 560);
+                             : guideLines(text, questView == 1 ? 1200 : 560);
     buildQuestRows(q);
+}
+
+// Wraps the guide text. A picture ('@img path w h') becomes one '@img path w h' line, sized to the
+// column, followed by '@cont' lines for the rows it covers; '@cap' captions wrap with their prefix.
+std::vector<std::string> App::guideLines(const std::string &text, int width) {
+    std::vector<std::string> out;
+    std::istringstream ss(text);
+    std::string line;
+    while (std::getline(ss, line)) {
+        if (line.rfind("@img ", 0) == 0) {
+            char path[256];
+            int w = 0, h = 0;
+            if (sscanf(line.c_str() + 5, "%255s %d %d", path, &w, &h) != 3 || w <= 0 || h <= 0)
+                continue;
+            int dw = std::min(w, width), dh = h * dw / w;
+            out.push_back("@img " + std::string(path) + " " + std::to_string(dw) + " " + std::to_string(dh));
+            for (int k = 1; k < (dh + 8 + 25) / 26; k++)
+                out.push_back("@cont");
+        } else if (line.rfind("@cap ", 0) == 0) {
+            for (const auto &l : ui.wrap(line.substr(5), FS_SMALL, width))
+                out.push_back("@cap " + l);
+        } else {
+            for (auto &l : ui.wrap(line, FS_SMALL, width))
+                out.push_back(std::move(l));
+        }
+    }
+    return out;
+}
+
+// Loads a guide picture from the SD card or romfs, downloading it from the data branch once.
+SDL_Texture *App::wikiPicture(const std::string &path, bool &missing) {
+    missing = false;
+    auto it = wikiPics.find(path);
+    if (it != wikiPics.end()) {
+        missing = !it->second;
+        return it->second;
+    }
+    std::string sd = std::string(APP_DIR "/") + path, file;
+    if (fileExists(sd))
+        file = sd;
+    else if (fileExists("romfs:/" + path))
+        file = "romfs:/" + path;
+    else if (wikiFetched)
+        return nullptr; // try next frame
+    else {
+        wikiFetched = true;
+        HttpResult r = httpGet(DATA_URL + path);
+        if (r.ok && r.status == 200 && writeFile(sd, r.body))
+            file = sd;
+    }
+    SDL_Texture *t = file.empty() ? nullptr : ui.loadImage(file);
+    wikiPics[path] = t;
+    missing = !t;
+    return t;
+}
+
+void App::drawGuidePicture(const std::string &line, int y) {
+    char path[256];
+    int w = 0, h = 0;
+    if (sscanf(line.c_str() + 5, "%255s %d %d", path, &w, &h) != 3)
+        return;
+    bool missing;
+    SDL_Texture *t = wikiPicture(path, missing);
+    if (t) {
+        SDL_FRect dst{32.f, float(y + 2), float(w), float(h)};
+        ui.image(t, nullptr, &dst);
+    } else {
+        ui.fill(32, y + 2, w, h, col::cell);
+        ui.text(48, y + 14, missing ? "Picture unavailable offline" : "Loading picture...", FS_SMALL, col::faint);
+    }
+}
+
+void App::dropWikiPictures() {
+    for (auto &kv : wikiPics)
+        if (kv.second)
+            SDL_DestroyTexture(kv.second);
+    wikiPics.clear();
 }
 
 void App::buildQuestRows(const Quest &q) {
@@ -1575,6 +1660,7 @@ void App::inputQuest() {
     const Quest &q = db.quests[openQuest];
     if (in.pressed(HidNpadButton_B)) {
         openQuest = -1;
+        dropWikiPictures();
         return;
     }
     if (in.pressed(HidNpadButton_Y)) {
@@ -1631,6 +1717,7 @@ void App::inputQuest() {
             dbList = ListView();
             dbDirty = true;
             openQuest = -1;
+            dropWikiPictures();
         }
     }
 }
@@ -2385,9 +2472,25 @@ void App::drawQuest() {
         ui.fill(16, top, gw, kBottom - top, col::panel);
         int lines = (kBottom - top - 50) / 26;
         y = top + 12;
+        SDL_Rect clipG{16, top + 4, gw, lines * 26 + 8};
+        ui.clip(&clipG);
+        wikiFetched = false;
+        // A picture that starts above the first visible row still shows its lower part.
+        if (textScroll < (int)questText.size() && questText[textScroll] == "@cont") {
+            int j = textScroll;
+            while (j > 0 && questText[j] == "@cont")
+                j--;
+            drawGuidePicture(questText[j], y - (textScroll - j) * 26);
+        }
         for (int i = 0; i < lines && textScroll + i < (int)questText.size(); i++) {
             const std::string &l = questText[textScroll + i];
-            if (l.rfind("## ", 0) == 0)
+            if (l == "@cont")
+                ;
+            else if (l.rfind("@img ", 0) == 0)
+                drawGuidePicture(l, y);
+            else if (l.rfind("@cap ", 0) == 0)
+                ui.text(32, y, l.substr(5), FS_SMALL, col::dim);
+            else if (l.rfind("## ", 0) == 0)
                 ui.text(32, y, l.substr(3), FS_SMALL, col::accent);
             else if (l.rfind("### ", 0) == 0)
                 ui.text(32, y, l.substr(4), FS_SMALL, col::warn);
@@ -2395,6 +2498,7 @@ void App::drawQuest() {
                 ui.text(32, y, l, FS_SMALL, col::text);
             y += 26;
         }
+        ui.clip(nullptr);
         drawScrollbar(16 + gw - 8, top + 8, lines * 26, questText.size(), lines, textScroll);
         ui.text(32, kBottom - 30, "Guide: Escape from Tarkov Wiki, CC BY-SA", FS_SMALL, col::faint);
     }
