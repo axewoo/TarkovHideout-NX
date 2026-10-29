@@ -48,6 +48,8 @@ public:
 
     // Images. Icon atlases are pages of 32 x 32 cells of 64 px; index / 1024 is the page.
     SDL_Texture *loadImage(const std::string &path, int *w = nullptr, int *h = nullptr);
+    // Loads a large image as a grid of tile x tile textures (row-major), for images past the GPU's size limit.
+    bool loadImageTiles(const std::string &path, int tile, std::vector<SDL_Texture *> &out, int &w, int &h);
     void setIcons(const std::vector<SDL_Texture *> &pages);
     bool hasIcons() const { return !icons.empty(); }
     // Draws an item icon in a square cell; idx < 0 draws an empty cell.

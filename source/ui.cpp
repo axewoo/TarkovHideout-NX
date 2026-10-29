@@ -157,6 +157,33 @@ SDL_Texture *Ui::loadImage(const std::string &path, int *w, int *h) {
     return tex;
 }
 
+bool Ui::loadImageTiles(const std::string &path, int tile, std::vector<SDL_Texture *> &out, int &w, int &h) {
+    SDL_Surface *surf = IMG_Load(path.c_str());
+    if (!surf)
+        return false;
+    w = surf->w;
+    h = surf->h;
+    int bpp = surf->format->BytesPerPixel;
+    bool ok = true;
+    for (int y = 0; y < h && ok; y += tile)
+        for (int x = 0; x < w && ok; x += tile) {
+            int tw = std::min(tile, w - x), th = std::min(tile, h - y);
+            SDL_Texture *t = SDL_CreateTexture(renderer, surf->format->format, SDL_TEXTUREACCESS_STATIC, tw, th);
+            ok = t && SDL_UpdateTexture(t, nullptr, (Uint8 *)surf->pixels + y * surf->pitch + x * bpp, surf->pitch) == 0;
+            if (t)
+                SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+            out.push_back(t);
+        }
+    SDL_FreeSurface(surf);
+    if (!ok) {
+        for (SDL_Texture *t : out)
+            if (t)
+                SDL_DestroyTexture(t);
+        out.clear();
+    }
+    return ok;
+}
+
 void Ui::setIcons(const std::vector<SDL_Texture *> &pages) {
     for (SDL_Texture *t : icons)
         SDL_DestroyTexture(t);

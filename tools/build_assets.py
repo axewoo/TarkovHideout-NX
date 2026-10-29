@@ -27,7 +27,7 @@ ICON_PX = 64
 ATLAS_COLS = 32
 PAGE_ICONS = ATLAS_COLS * ATLAS_COLS
 CELL_RGB = (36, 37, 32)  # col::cell in the app
-MAP_PX = 2048
+MAP_PX = 4096
 MAPS_META = "https://raw.githubusercontent.com/the-hideout/tarkov-dev/main/src/data/maps.json"
 
 # Game map ids that reuse another map's image.

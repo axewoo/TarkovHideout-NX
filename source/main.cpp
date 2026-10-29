@@ -35,6 +35,7 @@ static const int kTop = 68;
 static const int kBottom = 664;
 static const int kMapTop = 50;
 static const int kMapBottom = 676;
+static const int kMapTile = 2048;
 
 static const SDL_Color kMarkerColor[MK_COUNT] = {col::good, col::info, col::accent, col::violet, col::bad};
 static const char *kMarkerName[MK_COUNT] = {"PMC extract", "Scav extract", "Shared extract", "Transit", "Boss"};
@@ -234,6 +235,8 @@ private:
 
     void draw();
     void drawHeader();
+    void freeMapTiles();
+    void mapViewport(int &top, int &bottom) const;
     void drawFooter(const std::vector<std::pair<std::string, std::string>> &hints);
     void drawEmpty(const std::string &title, const std::string &sub);
     void drawStations();
@@ -305,8 +308,10 @@ private:
     std::vector<MapInfo> maps;
     std::string mapsRoot;
     int mapSel = 0;
-    SDL_Texture *mapTex = nullptr;
+    std::vector<SDL_Texture *> mapTiles; // kMapTile-sized pieces of the map image, row-major
+    int mapImgW = 0, mapImgH = 0;
     std::string mapTexId;
+    bool mapFull = false;
     bool mapFailed = false;
     float mapZoom = 1, mapU = 0.5f, mapV = 0.5f;
     int markerFilter = -1;  // -1 = all, else MarkerType
@@ -388,8 +393,7 @@ bool App::init() {
 
 void App::shutdown() {
     save();
-    if (mapTex)
-        SDL_DestroyTexture(mapTex);
+    freeMapTiles();
     ui.shutdown();
     netExit();
     socketExit();
@@ -975,14 +979,11 @@ bool App::ensureMapTexture() {
     const MapInfo *m = currentMap();
     if (!m)
         return false;
-    if (mapTex && mapTexId == m->id)
+    if (!mapTiles.empty() && mapTexId == m->id)
         return true;
     if (mapFailed && mapTexId == m->id)
         return false;
-    if (mapTex) {
-        SDL_DestroyTexture(mapTex);
-        mapTex = nullptr;
-    }
+    freeMapTiles();
     mapTexId = m->id;
     mapFailed = false;
     std::string sd = std::string(APP_DIR "/") + m->image;
@@ -1001,10 +1002,21 @@ bool App::ensureMapTexture() {
             setStatus("Could not download the " + m->name + " map", col::bad);
         }
     }
-    if (!path.empty())
-        mapTex = ui.loadImage(path);
-    mapFailed = !mapTex;
-    return mapTex != nullptr;
+    if (!path.empty() && !ui.loadImageTiles(path, kMapTile, mapTiles, mapImgW, mapImgH))
+        setStatus("Not enough memory for the " + m->name + " map", col::bad);
+    mapFailed = mapTiles.empty();
+    return !mapFailed;
+}
+
+void App::freeMapTiles() {
+    for (SDL_Texture *t : mapTiles)
+        SDL_DestroyTexture(t);
+    mapTiles.clear();
+}
+
+void App::mapViewport(int &top, int &bottom) const {
+    top = mapFull ? 0 : kMapTop;
+    bottom = mapFull ? 720 : kMapBottom;
 }
 
 void App::inputMaps() {
@@ -1034,6 +1046,8 @@ void App::inputMaps() {
     }
     if (in.pressed(HidNpadButton_Y))
         mapLabels = !mapLabels;
+    if (in.pressed(HidNpadButton_Minus))
+        mapFull = !mapFull;
     if (in.pressed(HidNpadButton_B) && pinReturn) {
         // Came from a quest or key page: go back to it.
         pinReturn = false;
@@ -1053,10 +1067,12 @@ void App::inputMaps() {
         zoomStep += 0.03f;
     if (in.held & HidNpadButton_X)
         zoomStep -= 0.03f;
-    mapZoom = std::clamp(mapZoom * (1 + zoomStep), 1.f, 8.f);
+    mapZoom = std::clamp(mapZoom * (1 + zoomStep), 1.f, 12.f);
 
     const MapInfo *m = currentMap();
-    float viewW = 1280, viewH = kMapBottom - kMapTop;
+    int top, bottom;
+    mapViewport(top, bottom);
+    float viewW = 1280, viewH = bottom - top;
     float fit = std::min(viewW / m->w, viewH / m->h);
     float scale = fit * mapZoom;
     float pan = 14.f / scale;
@@ -1835,23 +1851,36 @@ void App::drawMaps() {
         drawFooter({{"+", "Quit"}});
         return;
     }
-    float viewW = 1280, viewH = kMapBottom - kMapTop;
+    int top, bottom;
+    mapViewport(top, bottom);
+    float viewW = 1280, viewH = bottom - top;
     float fit = std::min(viewW / m->w, viewH / m->h);
     float scale = fit * mapZoom;
     float dw = m->w * scale, dh = m->h * scale;
     // Keep the view inside the image when zoomed in, centered when it fits.
     float ox = dw <= viewW ? (viewW - dw) / 2 : std::clamp(viewW / 2 - mapU * dw, viewW - dw, 0.f);
     float oy = dh <= viewH ? (viewH - dh) / 2 : std::clamp(viewH / 2 - mapV * dh, viewH - dh, 0.f);
-    oy += kMapTop;
+    oy += top;
 
-    SDL_Rect clipR{0, kMapTop, 1280, kMapBottom - kMapTop};
+    SDL_Rect clipR{0, top, 1280, bottom - top};
     ui.clip(&clipR);
-    ui.fill(0, kMapTop, 1280, kMapBottom - kMapTop, col::bg);
+    ui.fill(0, top, 1280, bottom - top, col::bg);
     if (ensureMapTexture()) {
-        SDL_FRect dst{ox, oy, dw, dh};
-        ui.image(mapTex, nullptr, &dst);
+        // Tiles share rounded edges so no seams open between them.
+        int cols = (mapImgW + kMapTile - 1) / kMapTile;
+        float sx = dw / mapImgW, sy = dh / mapImgH;
+        for (int i = 0; i < (int)mapTiles.size(); i++) {
+            int px = i % cols * kMapTile, py = i / cols * kMapTile;
+            int pw = std::min(kMapTile, mapImgW - px), ph = std::min(kMapTile, mapImgH - py);
+            float x0 = std::round(ox + px * sx), x1 = std::round(ox + (px + pw) * sx);
+            float y0 = std::round(oy + py * sy), y1 = std::round(oy + (py + ph) * sy);
+            if (x1 < 0 || x0 > 1280 || y1 < top || y0 > bottom)
+                continue;
+            SDL_FRect dst{x0, y0, x1 - x0, y1 - y0};
+            ui.image(mapTiles[i], nullptr, &dst);
+        }
     } else {
-        ui.text(40, kMapTop + 80, "Map image unavailable offline. Connect to download it once.", FS_BODY, col::dim);
+        ui.text(40, top + 80, "Map image unavailable offline. Connect to download it once.", FS_BODY, col::dim);
     }
 
     auto vis = visibleMarkers();
@@ -1895,6 +1924,16 @@ void App::drawMaps() {
         }
     }
 
+    if (mapFull) {
+        // Just a small name chip so the map gets the whole screen.
+        std::string t = m->name + "   - Exit fullscreen";
+        int tw = ui.measure(t, FS_SMALL);
+        ui.fill(12, 12, tw + 20, 32, SDL_Color{14, 15, 13, 200});
+        ui.text(22, 16, t, FS_SMALL, col::dim);
+        ui.clip(nullptr);
+        return;
+    }
+
     // Title card and legend.
     ui.fill(16, kMapTop + 12, 360, 70, SDL_Color{14, 15, 13, 215});
     ui.fill(16, kMapTop + 12, 4, 70, col::accent);
@@ -1921,9 +1960,9 @@ void App::drawMaps() {
     ui.clip(nullptr);
 
     if (pinReturn)
-        drawFooter({{"B", "Back"}, {"ZL/ZR", "Map"}, {"A/X", "Zoom"}, {"Y", "Labels"}});
+        drawFooter({{"B", "Back"}, {"ZL/ZR", "Map"}, {"A/X", "Zoom"}, {"Y", "Labels"}, {"-", "Full"}});
     else
-        drawFooter({{"ZL/ZR", "Map"}, {"</>", "Marker"}, {"^/v", "Filter"}, {"A/X", "Zoom"}, {"Y", "Labels"}});
+        drawFooter({{"ZL/ZR", "Map"}, {"</>", "Marker"}, {"^/v", "Filter"}, {"A/X", "Zoom"}, {"Y", "Labels"}, {"-", "Full"}});
 }
 
 
@@ -2500,7 +2539,8 @@ void App::draw() {
     if (needDirty)
         rebuildNeeded();
     ui.clear();
-    drawHeader();
+    if (!(tab == TAB_MAPS && mapFull && !maps.empty()))
+        drawHeader();
     switch (tab) {
     case TAB_STATIONS: drawStations(); break;
     case TAB_ITEMS: drawItems(); break;
