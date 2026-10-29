@@ -304,14 +304,22 @@ _floor_cache = {}
 
 
 def _height(layer):
+    # "2nd Floor" style names order floors; extents only matter for unnumbered ones (Icebreaker).
+    m = re.search(r"(\d+)(?:st|nd|rd|th)", layer.get("name", ""))
+    if m:
+        return 1000 * int(m.group(1))
     ext = layer.get("extents") or [{}]
     return (ext[0].get("height") or [0])[0]
 
 
-def svg_overlay(meta, gid, base_plan, size):
+def svg_overlay(meta, gid, size):
     """The pixels a floor group adds to the plan, as RGBA."""
+    # Compare against a fresh base render: the saved JPEG's artifacts would differ everywhere.
+    key = (meta["svgPath"], size)
+    if key not in _svg_cache:
+        _svg_cache[key] = render_svg(meta).resize(size, Image.LANCZOS)
     with_layer = render_svg(meta, keep=gid).resize(size, Image.LANCZOS)
-    diff = ImageChops.difference(with_layer, base_plan).convert("L")
+    diff = ImageChops.difference(with_layer, _svg_cache[key]).convert("L")
     mask = diff.point(lambda v: 255 if v > 12 else 0).filter(ImageFilter.MaxFilter(5))
     with_layer.putalpha(mask)
     return with_layer
@@ -325,7 +333,7 @@ def floor_image(base, overlay, path):
         return None
     comp = Image.eval(base.crop(box), lambda v: int(v * FLOOR_DIM))
     comp.paste(overlay.crop(box).convert("RGB"), (0, 0), alpha.crop(box))
-    comp.save(path, quality=85, optimize=True)
+    comp.save(path, quality=80, optimize=True)
     w, h = base.size
     return [round(box[0] / w, 5), round(box[1] / h, 5), round(box[2] / w, 5), round(box[3] / h, 5)]
 
@@ -357,7 +365,7 @@ def build_floors(meta, proj, rect, img_key, out, files):
                 if layer.get("tilePath") and render_idx is not None:
                     tiles = render_tiles(meta, proj, rect, layer["tilePath"]).resize(size, Image.LANCZOS)
                 if layer.get("svgLayer") and plan_idx is not None:
-                    svg = svg_overlay(meta, layer["svgLayer"], bases[plan_idx], size)
+                    svg = svg_overlay(meta, layer["svgLayer"], size)
             except Exception as e:  # noqa: BLE001
                 print(f"  {img_key} floor {layer['name']} failed: {e}", file=sys.stderr)
             entry = {"n": layer["name"], "h": _height(layer)}
