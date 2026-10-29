@@ -1977,11 +1977,12 @@ void App::drawMapPicker() {
         if (on)
             ui.rect(x, y, cw, ch, col::accent);
         ui.fill(x, y + thumbH, cw, 2, on ? col::accent : col::line);
-        ui.text(x + 12, y + thumbH + 6, m.name, FS_SMALL, on ? col::text : col::dim, cw - 24);
-        std::string sub = m.duration ? std::to_string(m.duration) + " min" : "";
-        if (!m.floors.empty())
-            sub += (sub.empty() ? "" : "  ") + std::to_string(m.floors.size()) + " levels";
-        ui.textRight(x + cw - 12, y + thumbH + 8, sub, FS_SMALL, col::faint);
+        // Level count on the right; the name gets the rest of the line.
+        std::string sub = m.floors.empty() ? "" : std::to_string(m.floors.size()) + " levels";
+        int subW = sub.empty() ? 0 : ui.measure(sub, FS_SMALL) + 12;
+        ui.text(x + 12, y + thumbH + 6, m.name, FS_SMALL, on ? col::text : col::dim, cw - 24 - subW);
+        if (!sub.empty())
+            ui.textRight(x + cw - 12, y + thumbH + 8, sub, FS_SMALL, col::faint);
     }
     drawScrollbar(1268, kTop - 8, kBottom - kTop + 8, rows, visible, firstRow);
     drawFooter({{"A", "Open"}, {"+", "Quit"}});
