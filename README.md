@@ -1,67 +1,137 @@
+<div align="center">
+
 # Tarkov Hideout for Switch
 
-A hideout companion for Escape From Tarkov that runs as Nintendo Switch homebrew.
-It shows every hideout station, the items each level needs (with item icons),
-what you still have to find across the whole hideout, and the crafts you can
-run, with craft timers. It also has interactive maps with extracts, transits
-and boss spawns, a database of quests, ammo, keys and items, and a profile page
-with your level, raid stats and skills.
+**An offline Escape From Tarkov companion for Nintendo Switch homebrew.**
+Hideout planner, craft timers, sharp interactive maps, an ammo chart and a quest database, in your hands between raids.
 
-It never talks to Battlestate's servers. Game data comes from
-[tarkov.dev](https://tarkov.dev), and your progress can be pulled from
-[TarkovTracker](https://tarkovtracker.org).
+![Maps, ammo chart, quest guide and hideout stations](docs/screenshots/hero.jpg)
+
+[Install](#install) · [Hideout](#hideout) · [Maps](#maps) · [Ammo](#ammo) · [Database](#database) · [Profile and sync](#profile-and-tarkovtracker-sync) · [Controls](#controls) · [Building](#building)
+
+</div>
+
+---
+
+## Highlights
+
+- **Every hideout station and level**, with the items, tools and skills each one needs, and what you still have to find across the whole hideout.
+- **Craft timers** that keep running while the Switch sleeps.
+- **16 maps built from the game's own renders**, sharp up to 16x zoom, with extracts, transits, boss spawns and every floor of the multi-level maps.
+- **An ammo tab** with an eft-ammo style damage vs penetration chart. Pin rounds to compare them.
+- **Quest database** with wiki guides, pictures included, next to objectives, map pins and rewards.
+- **Works fully offline.** Data, icons, maps and wiki pictures ship inside the app and refresh daily when you're online.
+- **Never talks to Battlestate's servers.** Game data comes from [tarkov.dev](https://tarkov.dev), and you can pull your progress from [TarkovTracker](https://tarkovtracker.org).
 
 ## Install
 
-1. Download `TarkovHideout.nro` from the latest release.
+1. Download `TarkovHideout.nro` from the [latest release](../../releases/latest).
 2. Copy it to `sdmc:/switch/` on your SD card.
-3. Launch it from the Homebrew Menu. If the on-screen keyboard for the token
-   doesn't open, launch through title override (hold R while starting a game).
+3. Launch it from the Homebrew Menu. For the most memory, and for the on-screen keyboard, launch through title override (hold R while starting a game).
 
-Progress and settings are saved in `sdmc:/switch/TarkovHideout/`.
+Progress and settings are saved in `sdmc:/switch/TarkovHideout/`. The app is a few hundred MB because every map piece and wiki picture is bundled for offline use.
 
-## TarkovTracker sync
+## Hideout
 
-1. On tarkovtracker.org, open Settings and create an API token with the
-   **Get Progression** permission. Tokens are tied to a game mode, so make a
-   PVE token if you play PVE.
-2. In the app, open Settings, choose the token row and enter the token.
-3. The app syncs right away and on every launch (you can turn that off).
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/stations.jpg" alt="Stations"></td>
+<td width="50%"><img src="docs/screenshots/needed.jpg" alt="Needed items"></td>
+</tr>
+<tr>
+<td><b>Stations</b>. Pick a station to see the next level's requirements, mark levels as built and track item counts. Found-in-raid items are tagged.</td>
+<td><b>Needed</b>. Everything still missing across the hideout, with which stations want it. Y shows only found-in-raid items.</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/crafts.jpg" alt="Crafts"></td>
+<td><img src="docs/screenshots/timers.jpg" alt="Timers"></td>
+</tr>
+<tr>
+<td><b>Crafts</b>. Recipes at the stations you've built, filterable by station. A starts a timer.</td>
+<td><b>Timers</b>. Running and finished crafts. Collect or cancel them here.</td>
+</tr>
+</table>
 
-TarkovTracker's API is read-only for the hideout, so sync replaces the app's
-hideout progress with what TarkovTracker has. Changes you make in the app stay
-on the Switch until the next sync overwrites them.
+## Maps
 
-## Database
+Pick a map, then pan and zoom. Maps are built from tarkov.dev's game renders, at up to the source resolution (Icebreaker reaches 14,773 px tall). Only the pieces on screen load, a few per frame, so panning stays smooth while the detail sharpens.
 
-The Database tab has three sections (ZL / ZR):
+<img src="docs/screenshots/map-controls.jpg" alt="Map controls">
 
-- **Quests**: every quest by trader. A quest page shows the wiki guide on the
-  left and, on the right, requirements, keys and starting gear, objectives
-  (with Gunsmith build specs) and rewards. Objectives with a known location
-  open the map with a pin on it. Quests completed on TarkovTracker are marked.
-- **Keys**: what each key is for, and where its lock is on the map.
-- **Items**: search any item for prices, description and what it is needed for
-  (hideout, quests, crafts).
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/map-picker.jpg" alt="Map picker"></td>
+<td width="50%"><img src="docs/screenshots/map-floor.jpg" alt="Upper floor"></td>
+</tr>
+<tr>
+<td><b>Map picker</b>. Every map with a preview and its number of levels.</td>
+<td><b>Floors</b>. ZL / ZR steps through underground, ground and upper levels. The rest of the map dims.</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/map-plan.jpg" alt="Vector plan"></td>
+<td><img src="docs/screenshots/icebreaker-helipad.jpg" alt="Icebreaker helipad"></td>
+</tr>
+<tr>
+<td><b>Vector plan</b>. R3 switches between the game render and tarkov.dev's clean plan.</td>
+<td><b>Icebreaker</b>. All 16 decks, with the helicopter extract on the helipad.</td>
+</tr>
+</table>
 
-Everything is stored on the SD card, so it works offline. Quest guides are
-plain-text extracts from the [Escape from Tarkov Wiki](https://escapefromtarkov.fandom.com),
-licensed CC BY-SA.
+Press Minus for a fullscreen map. Quest objectives and key locks open the map with a pin on the spot.
 
 ## Ammo
 
-Every round with damage, penetration, armor damage and fragmentation, filterable
-by caliber, next to an eft-ammo.com style damage vs penetration chart with armor
-class columns. Pin up to eight rounds with A to compare them on the chart; the
-panel below shows speed, flea price and a rough read of each armor class.
+<img src="docs/screenshots/ammo.jpg" alt="Ammo tab with chart">
 
-## Profile
+Every round with damage, penetration, armor damage and fragmentation, filterable by caliber. The chart plots damage against penetration with armor class columns, like [eft-ammo.com](https://eft-ammo.com). Pin up to eight rounds with A to compare them in color. The panel below shows speed, flea price and a rough read of each armor class.
 
-The Profile tab is labelled with your player name and game mode, and shows the public snapshot tarkov.dev keeps of your account.
-Search your in-game name on [tarkov.dev/players](https://tarkov.dev/players),
-open your profile and enter the number at the end of the link in the app. The
-snapshot refreshes when a profile is looked up on tarkov.dev, so it can lag
-behind the game by a few days.
+## Database
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/quests.jpg" alt="Quest list"></td>
+<td width="50%"><img src="docs/screenshots/quest.jpg" alt="Quest page"></td>
+</tr>
+<tr>
+<td><b>Quests</b>. Every quest by trader. Quests completed on TarkovTracker are marked.</td>
+<td><b>Quest page</b>. The wiki guide with its pictures on the left. Requirements, objectives (with Gunsmith build specs), map pins and rewards on the right.</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/quest-guide.jpg" alt="Guide only"></td>
+<td><img src="docs/screenshots/keys.jpg" alt="Keys"></td>
+</tr>
+<tr>
+<td><b>Guide only</b>. Y cycles guide + details, guide only and details only.</td>
+<td><b>Keys</b>. What each key opens, which quests need it and where its lock is on the map.</td>
+</tr>
+</table>
+
+<img src="docs/screenshots/items.jpg" alt="Items" width="50%" align="right">
+
+**Items**. Search any item for prices, best trader, description and what it's needed for (hideout, quests, crafts).
+
+Quest guides and pictures come from the [Escape from Tarkov Wiki](https://escapefromtarkov.fandom.com) (CC BY-SA). The app downloads them from this repository's data branch, never from the wiki itself. Settings > *Download all wiki pictures* fetches any that aren't bundled yet.
+
+<br clear="right">
+
+## Profile and TarkovTracker sync
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/profile.jpg" alt="Profile setup"></td>
+<td width="50%"><img src="docs/screenshots/settings.jpg" alt="Settings"></td>
+</tr>
+</table>
+
+**Profile**. The tab is labelled with your player name and game mode. It shows the public snapshot tarkov.dev keeps of your account: level, PMC and Scav raid stats, and skills. Search your in-game name on [tarkov.dev/players](https://tarkov.dev/players), open your profile, and enter the number at the end of the link in the app. The snapshot refreshes when someone looks up the profile on tarkov.dev, so it can lag behind the game by a few days.
+
+**TarkovTracker sync**
+
+1. On tarkovtracker.org, open Settings and create an API token with the **Get Progression** permission. Tokens are tied to a game mode, so make a PVE token if you play PVE.
+2. In the app, open Settings, choose the token row and enter the token.
+3. The app syncs right away and on every launch (you can turn that off).
+
+TarkovTracker's API is read-only for the hideout. Sync replaces the app's hideout progress with what TarkovTracker has, and changes you make in the app stay on the Switch until the next sync overwrites them.
 
 ## Controls
 
@@ -76,20 +146,20 @@ behind the game by a few days.
 | Stations | Right | Edit item counts for the shown level |
 | Item counts | A / X / Y | +1 / -1 / all or none |
 | Needed items | Left / Right | Page through the list |
+| Needed items | Y | Show only found-in-raid items |
 | Crafts | Left / Right | Filter by station |
 | Crafts | A | Start a timer, or collect a finished one |
 | Crafts, Timers | X | Cancel a timer |
-| Needed items | Y | Show only found-in-raid items |
 | Map picker | D-pad, A | Choose a map, open it |
-| Maps | B | Back to the map picker |
-| Maps | ZL / ZR | Floor down / up (maps with several levels) |
 | Maps | Left stick, touch | Pan |
 | Maps | Right stick, A / X | Zoom in / out |
+| Maps | ZL / ZR | Floor down / up |
 | Maps | Left / Right | Jump between markers |
 | Maps | Up / Down | Filter marker type |
 | Maps | Y | Toggle labels |
+| Maps | R3 (click right stick) | Game render / vector plan |
 | Maps | - | Fullscreen map |
-| Maps | R3 (click right stick) | Switch between game render and vector plan |
+| Maps | B | Back to the map picker |
 | Ammo | Left / Right | Caliber filter |
 | Ammo | A | Pin or unpin the round on the chart |
 | Ammo | ZL / ZR | Page through the list |
@@ -103,16 +173,16 @@ behind the game by a few days.
 | Quest page | Y | Cycle guide + details, guide only, details only |
 | Profile | A / X | Refresh / change profile ID |
 
-## Data
+## How the data works
 
-`.github/workflows/data.yml` runs daily. It pulls the full hideout, item, craft
-and trader data from json.tarkov.dev, resolves names and publishes a small file
-per game mode to the `data` branch. With `--assets` it also packs the icons of
-every item the hideout uses into one atlas (`icons.png`) and renders each map
-from tarkov.dev's map art to a JPEG, converting extract, transit and boss
-positions to image coordinates (`maps-<mode>.json`). The app downloads these
-files, since the full item catalogue is too large to fetch on the Switch.
-Builds bundle a copy of everything for offline use.
+`.github/workflows/data.yml` runs daily and publishes everything the app reads to the `data` branch:
+
+- **Hideout, items, crafts and traders** from json.tarkov.dev, compacted to one small file per game mode.
+- **Item icons**, packed into atlas pages.
+- **Maps** rendered from tarkov.dev's map tiles and SVG plans. Each map is published as an overview image plus 1024 px pieces at several sharpness levels, with separate pieces for each floor. Extract, transit and boss positions are converted to map coordinates.
+- **Quests, ammo and keys** for the database, and **wiki guides** with their pictures.
+
+Daily runs reuse map renders and pictures that already exist, so they only push what changed. The app downloads fresh files when you choose *Download latest data* in Settings. NRO builds bundle the whole data branch for offline use.
 
 ## Building
 
@@ -122,4 +192,8 @@ git clone --depth 1 -b data https://github.com/axewoo/TarkovHideout-NX data && r
 docker run --rm -v "$PWD":/src -w /src devkitpro/devkita64 make
 ```
 
-Not affiliated with Battlestate Games, tarkov.dev or TarkovTracker.
+Built with libnx, SDL2 (ttf, image), libcurl and nlohmann/json.
+
+---
+
+<sub>Not affiliated with Battlestate Games, tarkov.dev, TarkovTracker or the Escape from Tarkov Wiki. Escape From Tarkov is a trademark of Battlestate Games.</sub>
