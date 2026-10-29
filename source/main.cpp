@@ -2592,8 +2592,12 @@ void App::buildQuestRows(const Quest &q) {
             text("Level " + std::to_string(q.level), col::text);
         for (const auto &t : q.traderReqs)
             text(t, col::text);
-        for (const auto &p : q.prereqs)
-            text("Complete " + p, col::dim);
+        for (const auto &p : q.prereqs) {
+            bool done = false;
+            for (const auto &o : db.quests)
+                done |= o.name == p && st.tasksDone.count(o.id);
+            text((done ? "Done: " : "Complete ") + p, done ? col::good : col::dim);
+        }
     }
     if (!q.keys.empty() || !q.startItems.empty()) {
         head("Bring / you get");
@@ -2735,6 +2739,7 @@ void App::inputQuest() {
             markQuests(before, true);
         else
             markQuests({openQuest}, !st.tasksDone.count(q.id));
+        buildQuestRows(q);
         return;
     }
     if (in.pressed(HidNpadButton_Y)) {
