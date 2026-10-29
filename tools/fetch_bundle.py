@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""Copies the published data branch files into OUT_DIR for bundling in romfs.
+
+Usage: fetch_bundle.py OUT_DIR
+"""
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+BASE = "https://raw.githubusercontent.com/axewoo/TarkovHideout-NX/data/"
+
+
+def get(name, out):
+    req = urllib.request.Request(BASE + name, headers={"User-Agent": "TarkovHideout-NX-build"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        body = r.read()
+    path = os.path.join(out, name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(body)
+    return body
+
+
+def main():
+    out = sys.argv[1]
+    images = set()
+    for mode in ("pve", "pvp"):
+        get(f"hideout-{mode}.json", out)
+        get(f"db-{mode}.json", out)
+        maps = json.loads(get(f"maps-{mode}.json", out))
+        for m in maps["maps"]:
+            images.update(f for f in (m["img"], m.get("alt"), m.get("thumb")) if f)
+            images.update(f for fl in m.get("floors", []) for f in (fl.get("img"), fl.get("alt")) if f)
+    get("wiki.json", out)
+    pages = 0
+    while True:
+        try:
+            get(f"icons-{pages}.jpg", out)
+        except urllib.error.HTTPError as e:
+            if e.code != 404 or pages == 0:
+                raise
+            break
+        pages += 1
+    for img in sorted(images):
+        get(img, out)
+    print(f"bundled hideout data, database, wiki, {pages} icon pages and {len(images)} map images")
+
+
+if __name__ == "__main__":
+    main()

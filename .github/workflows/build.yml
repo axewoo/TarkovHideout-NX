@@ -1,0 +1,43 @@
+name: Build NRO
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkita64:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bundle current data, icons and maps
+        # Takes the files the data workflow published, so the NRO works offline
+        # from the first launch. The app still downloads fresh data on its own.
+        run: |
+          git clone -q --depth 1 -b data "https://github.com/${{ github.repository }}" data-branch &&
+            rm -rf data-branch/.git && cp -r data-branch/. romfs/ && rm -rf data-branch && du -sh romfs ||
+            python3 tools/fetch_bundle.py romfs || {
+            echo "::warning::data branch unavailable, bundling hideout data without icons or maps"
+            python3 tools/build_data.py romfs || echo "::warning::tarkov.dev unreachable, NRO ships without bundled data"
+          }
+
+      - name: Build
+        run: make -j$(nproc)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TarkovHideout
+          path: TarkovHideout.nro
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: TarkovHideout.nro
