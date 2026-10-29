@@ -52,6 +52,13 @@ static bool writeFile(const std::string &path, const std::string &data) {
     return std::rename(tmp.c_str(), path.c_str()) == 0;
 }
 
+static std::string groupDigits(int n) {
+    std::string s = std::to_string(n);
+    for (int i = (int)s.size() - 3; i > 0; i -= 3)
+        s.insert(i, ",");
+    return s;
+}
+
 static std::string nowString() {
     time_t t = time(nullptr);
     struct tm tmv;
@@ -809,7 +816,7 @@ void App::drawStations() {
         int w = ui.text(px + 14, ry + 2, r.name, FS_BODY, c, 560);
         if (r.fir)
             ui.text(px + 22 + w, ry + 6, "FIR", FS_SMALL, col::warn);
-        ui.textRight(1240, ry + 2, std::to_string(have) + " / " + std::to_string(r.count), FS_BODY, c);
+        ui.textRight(1240, ry + 2, groupDigits(have) + " / " + groupDigits(r.count), FS_BODY, c);
     }
     drawScrollbar(1260, y, rows * 36, m, rows, reqList.scroll);
 
@@ -828,26 +835,23 @@ void App::drawItems() {
         drawFooter("L/R tabs   + quit");
         return;
     }
-    int total = 0;
-    for (const auto &n : needed)
-        total += n.need;
     for (int i = 0; i < visible && itemList.scroll + i < (int)needed.size(); i++) {
         int idx = itemList.scroll + i;
         const NeededItem &n = needed[idx];
         int y = kTop + i * kRowH;
         if (idx == itemList.sel)
             ui.fill(16, y, 1240, kRowH - 4, col::panelHi);
-        ui.text(28, y + 6, "x" + std::to_string(n.need), FS_BODY, col::accent);
-        int w = ui.text(110, y + 6, n.name, FS_BODY, col::text, 560);
+        ui.textRight(150, y + 6, "x" + groupDigits(n.need), FS_BODY, col::accent);
+        int w = ui.text(168, y + 6, n.name, FS_BODY, col::text, 540);
         if (n.fir)
-            ui.text(118 + w, y + 10, "FIR", FS_SMALL, col::warn);
+            ui.text(176 + w, y + 10, "FIR", FS_SMALL, col::warn);
         std::string used;
         for (size_t k = 0; k < n.usedBy.size(); k++)
             used += (k ? ", " : "") + n.usedBy[k];
         ui.text(760, y + 10, used, FS_SMALL, col::dim, 480);
     }
     drawScrollbar(1262, kTop, visible * kRowH, needed.size(), visible, itemList.scroll);
-    drawFooter(std::to_string(needed.size()) + " items, " + std::to_string(total) + " total   Left/Right page");
+    drawFooter(std::to_string(needed.size()) + " different items   Left/Right page");
 }
 
 void App::drawCrafts() {
@@ -873,7 +877,7 @@ void App::drawCrafts() {
         const Station *s = data.station(c.stationId);
         bool locked = s && st.builtLevel(*s) < c.level;
         ui.text(28, y + 4, craftTitle(c), FS_BODY, locked ? col::dim : col::text, 800);
-        std::string sub = (s ? s->name : c.stationId) + " " + std::to_string(c.level) + "  <-  ";
+        std::string sub = (s ? s->name : c.stationId) + " " + std::to_string(c.level) + (c.req.empty() ? "" : "  <-  ");
         for (size_t k = 0; k < c.req.size(); k++)
             sub += (k ? ", " : "") + c.req[k].shortName + (c.req[k].count > 1 ? " x" + std::to_string(c.req[k].count) : "");
         ui.text(28, y + 32, sub, FS_SMALL, col::dim, 960);
