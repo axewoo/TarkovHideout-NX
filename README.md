@@ -34,14 +34,12 @@ on the Switch until the next sync overwrites them.
 
 ## Database
 
-The Database tab has four sections (ZL / ZR):
+The Database tab has three sections (ZL / ZR):
 
 - **Quests**: every quest by trader. A quest page shows the wiki guide on the
   left and, on the right, requirements, keys and starting gear, objectives
   (with Gunsmith build specs) and rewards. Objectives with a known location
   open the map with a pin on it. Quests completed on TarkovTracker are marked.
-- **Ammo**: damage, penetration, armor damage, fragmentation, speed and flea
-  price, filterable by caliber.
 - **Keys**: what each key is for, and where its lock is on the map.
 - **Items**: search any item for prices, description and what it is needed for
   (hideout, quests, crafts).
@@ -49,6 +47,13 @@ The Database tab has four sections (ZL / ZR):
 Everything is stored on the SD card, so it works offline. Quest guides are
 plain-text extracts from the [Escape from Tarkov Wiki](https://escapefromtarkov.fandom.com),
 licensed CC BY-SA.
+
+## Ammo
+
+Every round with damage, penetration, armor damage and fragmentation, filterable
+by caliber, next to an eft-ammo.com style damage vs penetration chart with armor
+class columns. Pin up to eight rounds with A to compare them on the chart; the
+panel below shows speed, flea price and a rough read of each armor class.
 
 ## Profile
 
@@ -85,8 +90,12 @@ behind the game by a few days.
 | Maps | Y | Toggle labels |
 | Maps | - | Fullscreen map |
 | Maps | R3 (click right stick) | Switch between game render and vector plan |
+| Ammo | Left / Right | Caliber filter |
+| Ammo | A | Pin or unpin the round on the chart |
+| Ammo | ZL / ZR | Page through the list |
+| Ammo | Y / X | Search / clear search, then clear the chart |
 | Database | ZL / ZR | Switch section |
-| Database | Left / Right | Trader or caliber filter (page in Keys and Items) |
+| Database | Left / Right | Trader filter (page in Keys and Items) |
 | Database | Y / X | Search / clear search |
 | Database | A | Open quest, show key lock on the map |
 | Quest page | Up / Down, A | Pick an objective or item, show it on the map |

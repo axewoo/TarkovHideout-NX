@@ -26,11 +26,13 @@
 #define TRACKER_API "https://api.tarkovtracker.org"
 #define PROFILE_API "https://players.tarkov.dev/"
 
-enum Tab { TAB_STATIONS, TAB_ITEMS, TAB_CRAFTS, TAB_TIMERS, TAB_MAPS, TAB_DATABASE, TAB_PROFILE, TAB_SETTINGS, TAB_COUNT };
-static const char *kTabNames[TAB_COUNT] = {"Stations", "Needed", "Crafts", "Timers", "Maps", "Database", "Profile", "Settings"};
+enum Tab { TAB_STATIONS, TAB_ITEMS, TAB_CRAFTS, TAB_TIMERS, TAB_MAPS, TAB_AMMO, TAB_DATABASE, TAB_PROFILE, TAB_SETTINGS,
+           TAB_COUNT };
+static const char *kTabNames[TAB_COUNT] = {"Stations", "Needed", "Crafts", "Timers", "Maps", "Ammo", "Database", "Profile",
+                                           "Settings"};
 
-enum DbSection { DB_QUESTS, DB_AMMO, DB_KEYS, DB_ITEMS, DB_COUNT };
-static const char *kDbNames[DB_COUNT] = {"Quests", "Ammo", "Keys", "Items"};
+enum DbSection { DB_QUESTS, DB_KEYS, DB_ITEMS, DB_COUNT };
+static const char *kDbNames[DB_COUNT] = {"Quests", "Keys", "Items"};
 static const int kMaxIconPages = 8;
 
 static const int kTop = 68;
@@ -238,6 +240,7 @@ private:
     void inputTimers();
     void inputMaps();
     void inputDatabase();
+    void inputAmmo();
     void inputQuest();
     void inputProfile();
     void inputSettings();
@@ -257,6 +260,9 @@ private:
     void drawDbHeader();
     void drawQuestList();
     void drawAmmo();
+    void drawAmmoChart(int x, int y, int w, int h);
+    void drawAmmoDetail(const Ammo &a, int x, int y, int w);
+    void filterAmmo();
     void drawKeys();
     void drawDbItems();
     void drawItemDetail(const std::string &id, int x, int y, int w);
@@ -368,6 +374,14 @@ private:
     std::map<std::string, std::string> wiki;
     bool wikiLoaded = false;
     int dbSection = DB_QUESTS;
+
+    // Ammo tab
+    ListView ammoList;
+    std::vector<int> ammoRows;    // indices into db.ammo
+    std::vector<int> ammoPicked;  // rounds pinned to the chart, in pick order
+    int ammoCal = 0;              // 0 = all calibers, else db.calibers index + 1
+    std::string ammoSearch;
+    bool ammoDirty = true;
     std::string dbSearch;
     int dbFilter = 0;  // trader or caliber index + 1, 0 = all
     bool dbDirty = true;
@@ -874,6 +888,7 @@ void App::input() {
     case TAB_CRAFTS: inputCrafts(); break;
     case TAB_TIMERS: inputTimers(); break;
     case TAB_MAPS: inputMaps(); break;
+    case TAB_AMMO: inputAmmo(); break;
     case TAB_DATABASE: inputDatabase(); break;
     case TAB_PROFILE: inputProfile(); break;
     case TAB_SETTINGS: inputSettings(); break;
@@ -1457,15 +1472,6 @@ void App::filterDb() {
                 dbRows.push_back(i);
         }
         break;
-    case DB_AMMO:
-        for (int i = 0; i < (int)db.ammo.size(); i++) {
-            const Ammo &a = db.ammo[i];
-            if (dbFilter > 0 && a.caliber != db.calibers[dbFilter - 1])
-                continue;
-            if (matches(itemName(a.item), q) || matches(a.caliber, q))
-                dbRows.push_back(i);
-        }
-        break;
     case DB_KEYS:
         for (int i = 0; i < (int)db.keys.size(); i++)
             if (matches(itemName(db.keys[i].item), q))
@@ -1482,7 +1488,7 @@ void App::filterDb() {
 }
 
 int filterCount(int section, const Database &db) {
-    return section == DB_QUESTS ? db.traders.size() : (section == DB_AMMO ? db.calibers.size() : 0);
+    return section == DB_QUESTS ? db.traders.size() : 0;
 }
 
 void App::showPins(const std::string &label, const std::vector<Pin> &list) {
@@ -2425,8 +2431,7 @@ void App::drawDbHeader() {
     x += 90;
     int nf = filterCount(dbSection, db);
     if (nf > 0) {
-        std::string f = dbFilter == 0 ? (dbSection == DB_QUESTS ? "All traders" : "All calibers")
-                                       : (dbSection == DB_QUESTS ? db.traders : db.calibers)[dbFilter - 1];
+        std::string f = dbFilter == 0 ? "All traders" : db.traders[dbFilter - 1];
         ui.text(x, kTop - 4, "<  " + f + "  >", FS_BODY, col::accent, 300);
     }
     if (!dbSearch.empty())
@@ -2474,42 +2479,250 @@ void App::drawQuestList() {
     drawFooter({{"A", "Open"}, {"Y", "Search"}, {"</>", "Trader"}, {"ZL/ZR", "Section"}});
 }
 
+// Colors for rounds pinned to the chart.
+static const SDL_Color kPickColors[] = {col::info, col::good, col::violet, col::warn, col::bad,
+                                        {96, 200, 190, 255}, {226, 120, 170, 255}, {230, 226, 210, 255}};
+static const int kMaxPicks = 8;
+
+void App::filterAmmo() {
+    ammoDirty = false;
+    ammoRows.clear();
+    std::string q = lower(ammoSearch);
+    for (int i = 0; i < (int)db.ammo.size(); i++) {
+        const Ammo &a = db.ammo[i];
+        if (ammoCal > 0 && a.caliber != db.calibers[ammoCal - 1])
+            continue;
+        if (matches(itemName(a.item), q) || matches(a.caliber, q))
+            ammoRows.push_back(i);
+    }
+}
+
+void App::inputAmmo() {
+    ensureDb();
+    if (in.pressed(HidNpadButton_Y)) {
+        std::string q;
+        if (keyboard("Search ammo", "Part of a name or caliber", ammoSearch, false, q)) {
+            ammoSearch = q;
+            ammoList = ListView();
+            ammoDirty = true;
+        }
+    }
+    if (in.pressed(HidNpadButton_X)) {
+        if (!ammoSearch.empty()) {
+            ammoSearch.clear();
+            ammoList = ListView();
+            ammoDirty = true;
+        } else if (!ammoPicked.empty()) {
+            ammoPicked.clear();
+            setStatus("Chart cleared");
+        }
+    }
+    int nc = db.calibers.size();
+    if (nc > 0 && (in.left() || in.right())) {
+        ammoCal = (ammoCal + (in.right() ? 1 : -1) + nc + 1) % (nc + 1);
+        ammoList = ListView();
+        ammoDirty = true;
+    }
+    if (ammoDirty)
+        filterAmmo();
+    int n = ammoRows.size();
+    if (in.up())
+        ammoList.move(-1, n);
+    if (in.downDir())
+        ammoList.move(1, n);
+    if (in.pressed(HidNpadButton_ZL))
+        ammoList.move(-10, n);
+    if (in.pressed(HidNpadButton_ZR))
+        ammoList.move(10, n);
+    ammoList.clampSel(n);
+    if (n > 0 && in.pressed(HidNpadButton_A)) {
+        int idx = ammoRows[ammoList.sel];
+        auto it = std::find(ammoPicked.begin(), ammoPicked.end(), idx);
+        if (it != ammoPicked.end())
+            ammoPicked.erase(it);
+        else if ((int)ammoPicked.size() >= kMaxPicks)
+            setStatus("The chart holds " + std::to_string(kMaxPicks) + " rounds; unpin one with A first", col::warn);
+        else
+            ammoPicked.push_back(idx);
+    }
+}
+
 void App::drawAmmo() {
-    const int rowH = 46, top = kTop + 76;
-    static const char *cols[] = {"Damage", "Pen", "Armor dmg", "Frag", "Speed", "Flea"};
-    static const int colX[] = {640, 740, 860, 960, 1060, 1240};
-    ui.fill(16, kTop + 38, 1248, 34, col::panel);
-    ui.text(84, kTop + 42, "Round", FS_SMALL, col::dim);
-    for (int c = 0; c < 6; c++)
-        ui.textRight(colX[c], kTop + 42, cols[c], FS_SMALL, col::dim);
+    ensureDb();
+    if (ammoDirty)
+        filterAmmo();
+    if (db.ammo.empty()) {
+        drawEmpty("No ammo data yet.", "Connect to the internet and use Settings > Download latest hideout data.");
+        drawFooter({{"+", "Quit"}});
+        return;
+    }
+    // Caliber filter and search above the list.
+    std::string cal = ammoCal == 0 ? "All calibers" : db.calibers[ammoCal - 1];
+    ui.text(24, kTop - 6, "<  " + cal + "  >", FS_BODY, col::accent, 420);
+    if (!ammoSearch.empty())
+        drawBadge(460, kTop - 4, "Search: " + ammoSearch, col::info);
+
+    const int lx = 16, lw = 620, rowH = 40, top = kTop + 66;
+    static const char *cols[] = {"Dmg", "Pen", "Arm", "Frag"};
+    static const int colX[] = {440, 508, 568, 628};
+    ui.fill(lx, kTop + 30, lw, 32, col::panel);
+    ui.text(lx + 52, kTop + 34, "Round", FS_SMALL, col::dim);
+    for (int c = 0; c < 4; c++)
+        ui.textRight(colX[c], kTop + 34, cols[c], FS_SMALL, col::dim);
     int visible = (kBottom - top) / rowH;
-    dbList.clamp(dbRows.size(), visible);
-    std::string lastCal;
-    for (int i = 0; i < visible && dbList.scroll + i < (int)dbRows.size(); i++) {
-        int idx = dbList.scroll + i;
-        const Ammo &a = db.ammo[dbRows[idx]];
+    ammoList.clamp(ammoRows.size(), visible);
+    for (int i = 0; i < visible && ammoList.scroll + i < (int)ammoRows.size(); i++) {
+        int idx = ammoList.scroll + i;
+        const Ammo &a = db.ammo[ammoRows[idx]];
         int y = top + i * rowH;
-        bool on = idx == dbList.sel;
-        if (on)
-            ui.fill(16, y, 1248, rowH - 4, col::panelHi);
-        ui.icon(itemIcon(a.item), 28, y + 2, 38);
+        bool on = idx == ammoList.sel;
+        if (on) {
+            ui.fill(lx, y, lw, rowH - 4, col::panelHi);
+            ui.fill(lx, y, 4, rowH - 4, col::accent);
+        }
+        auto pk = std::find(ammoPicked.begin(), ammoPicked.end(), ammoRows[idx]);
+        if (pk != ammoPicked.end())
+            ui.disc(lx + 12, y + 18, 5, kPickColors[pk - ammoPicked.begin()]);
+        ui.icon(itemIcon(a.item), lx + 20, y + 2, 32);
         std::string name = itemName(a.item);
-        int w = ui.text(84, y + 8, name, FS_SMALL, col::text, 400);
-        ui.text(84 + w + 10, y + 8, a.caliber, FS_SMALL, col::faint, 120);
+        int w = ui.text(lx + 60, y + 6, name, FS_SMALL, on ? col::text : col::dim, ammoCal ? 300 : 230);
+        if (!ammoCal)
+            ui.text(lx + 66 + w, y + 6, a.caliber, FS_SMALL, col::faint, 290 - w);
         std::string dmg = a.projectiles > 1 ? std::to_string(a.projectiles) + "x" + std::to_string(a.damage)
                                             : std::to_string(a.damage);
-        ui.textRight(colX[0], y + 8, dmg, FS_SMALL, col::text);
-        ui.fill(colX[1] - 52, y + 6, 54, 28, SDL_Color{penColor(a.pen).r, penColor(a.pen).g, penColor(a.pen).b, 60});
-        ui.textRight(colX[1], y + 8, std::to_string(a.pen), FS_SMALL, penColor(a.pen));
-        ui.textRight(colX[2], y + 8, std::to_string(a.armorDamage), FS_SMALL, col::text);
-        ui.textRight(colX[3], y + 8, std::to_string(a.frag) + "%", FS_SMALL, col::text);
-        ui.textRight(colX[4], y + 8, std::to_string(a.speed), FS_SMALL, col::dim);
-        const DbItem *it = db.item(a.item);
-        std::string price = it && it->price ? groupDigits(it->price) : (it && it->noFlea ? "no flea" : "-");
-        ui.textRight(colX[5], y + 8, price, FS_SMALL, col::accent);
+        ui.textRight(colX[0], y + 6, dmg, FS_SMALL, col::text);
+        SDL_Color pc = penColor(a.pen);
+        ui.fill(colX[1] - 44, y + 4, 46, 28, SDL_Color{pc.r, pc.g, pc.b, 60});
+        ui.textRight(colX[1], y + 6, std::to_string(a.pen), FS_SMALL, pc);
+        ui.textRight(colX[2], y + 6, std::to_string(a.armorDamage), FS_SMALL, col::dim);
+        ui.textRight(colX[3], y + 6, std::to_string(a.frag) + "%", FS_SMALL, col::dim);
     }
-    drawScrollbar(1266, top, visible * rowH, dbRows.size(), visible, dbList.scroll);
-    drawFooter({{"</>", "Caliber"}, {"Y", "Search"}, {"ZL/ZR", "Section"}});
+    drawScrollbar(lx + lw + 2, top, visible * rowH, ammoRows.size(), visible, ammoList.scroll);
+
+    drawAmmoChart(652, kTop - 8, 612, 400);
+    if (!ammoRows.empty())
+        drawAmmoDetail(db.ammo[ammoRows[ammoList.sel]], 652, kTop + 400, 612);
+    bool picked = !ammoRows.empty() &&
+                  std::find(ammoPicked.begin(), ammoPicked.end(), ammoRows[ammoList.sel]) != ammoPicked.end();
+    std::vector<std::pair<std::string, std::string>> hints = {{"A", picked ? "Unpin" : "Pin to chart"},
+                                                               {"</>", "Caliber"}, {"Y", "Search"}};
+    if (!ammoSearch.empty())
+        hints.push_back({"X", "Clear search"});
+    else if (!ammoPicked.empty())
+        hints.push_back({"X", "Clear chart"});
+    drawFooter(hints);
+}
+
+// Damage against penetration, like eft-ammo.com: armor class columns, the listed rounds as faint dots,
+// pinned rounds in color and the highlighted round with a ring.
+void App::drawAmmoChart(int x, int y, int w, int h) {
+    ui.fill(x, y, w, h, col::panel);
+    const int ml = 46, mr = 14, mt = 34, mb = 34;
+    int px = x + ml, py = y + mt, pw = w - ml - mr, ph = h - mt - mb;
+    std::vector<int> pts = ammoRows;
+    for (int i : ammoPicked)
+        if (std::find(pts.begin(), pts.end(), i) == pts.end())
+            pts.push_back(i);
+    int maxPen = 70, maxDmg = 100;
+    for (int i : pts) {
+        maxPen = std::max(maxPen, db.ammo[i].pen);
+        maxDmg = std::max(maxDmg, db.ammo[i].damage);
+    }
+    maxPen = (maxPen + 9) / 10 * 10;
+    int step = maxDmg > 300 ? 100 : maxDmg > 160 ? 50 : 25;
+    maxDmg = (maxDmg + step - 1) / step * step;
+    auto sx = [&](float pen) { return px + pen / maxPen * pw; };
+    auto sy = [&](float dmg) { return py + ph - dmg / maxDmg * ph; };
+
+    ui.text(x + 14, y + 6, "Damage vs penetration", FS_SMALL, col::accent);
+    // Armor classes: a round needs roughly 10 x class penetration to go through reliably.
+    for (int c = 1; c <= 6 && c * 10 <= maxPen; c++) {
+        int cx0 = int(sx(c * 10)), cx1 = int(sx(std::min(maxPen, c * 10 + 10)));
+        if (c % 2)
+            ui.fill(cx0, py, cx1 - cx0, ph, col::cell);
+        ui.fill(cx0, py, 1, ph, col::line);
+        std::string lbl = "Class " + std::to_string(c);
+        int lw = ui.measure(lbl, FS_SMALL);
+        if (cx1 - cx0 > lw + 4)
+            ui.text((cx0 + cx1 - lw) / 2, py + 2, lbl, FS_SMALL, col::faint);
+        else
+            ui.text(cx0 + 4, py + 2, std::to_string(c), FS_SMALL, col::faint);
+    }
+    for (int d = 0; d <= maxDmg; d += step) {
+        int yy = int(sy(d));
+        ui.fill(px, yy, pw, 1, d ? SDL_Color{58, 58, 50, 120} : col::line);
+        ui.textRight(px - 6, yy - 12, std::to_string(d), FS_SMALL, col::faint);
+    }
+    for (int p = 0; p <= maxPen; p += 10)
+        ui.text(int(sx(p)) - (p ? 10 : 4), py + ph + 4, std::to_string(p), FS_SMALL, col::faint);
+    ui.textRight(x + w - 14, y + 6, "x: penetration   y: damage", FS_SMALL, col::faint);
+
+    SDL_Rect clipR{px - 8, py - 8, pw + 16, ph + 16};
+    ui.clip(&clipR);
+    for (int i : ammoRows)
+        ui.disc(sx(db.ammo[i].pen), sy(db.ammo[i].damage), 4, col::dim);
+    int cur = ammoRows.empty() ? -1 : ammoRows[ammoList.sel];
+    // Labels go right of the dot, or left near the right edge; a placed label pushes later ones down.
+    std::vector<SDL_Rect> placed;
+    auto label = [&](int i, SDL_Color c, FontSize fs) {
+        const Ammo &a = db.ammo[i];
+        std::string name = itemName(a.item);
+        int tw = std::min(ui.measure(name, fs), 220), th = ui.lineHeight(fs);
+        float dx = sx(a.pen), dy = sy(a.damage);
+        int tx = dx + 10 + tw > px + pw ? int(dx) - 10 - tw - 8 : int(dx) + 10;
+        int ty = int(dy) - th / 2;
+        for (bool moved = true; moved;) {
+            moved = false;
+            for (const SDL_Rect &r : placed)
+                if (tx < r.x + r.w && tx + tw + 8 > r.x && ty < r.y + r.h && ty + th > r.y) {
+                    ty = r.y + r.h + 1;
+                    moved = true;
+                }
+        }
+        placed.push_back({tx - 4, ty, tw + 8, th});
+        ui.fill(tx - 4, ty, tw + 8, th, col::shadow);
+        ui.text(tx, ty, name, fs, c, tw);
+    };
+    for (size_t k = 0; k < ammoPicked.size(); k++) {
+        const Ammo &a = db.ammo[ammoPicked[k]];
+        ui.disc(sx(a.pen), sy(a.damage), 8, col::shadow);
+        ui.disc(sx(a.pen), sy(a.damage), 6, kPickColors[k]);
+    }
+    if (cur >= 0) {
+        const Ammo &a = db.ammo[cur];
+        ui.disc(sx(a.pen), sy(a.damage), 10, col::accent);
+        ui.disc(sx(a.pen), sy(a.damage), 7, col::bg);
+        ui.disc(sx(a.pen), sy(a.damage), 5, col::accent);
+        label(cur, col::text, FS_SMALL);
+    }
+    for (size_t k = 0; k < ammoPicked.size(); k++)
+        if (ammoPicked[k] != cur)
+            label(ammoPicked[k], kPickColors[k], FS_SMALL);
+    ui.clip(nullptr);
+}
+
+void App::drawAmmoDetail(const Ammo &a, int x, int y, int w) {
+    ui.fill(x, y + 8, w, kBottom - y - 8, col::panel);
+    ui.icon(itemIcon(a.item), x + 14, y + 20, 48);
+    ui.text(x + 74, y + 18, itemName(a.item), FS_BODY, col::text, w - 90);
+    const DbItem *it = db.item(a.item);
+    std::string price = it && it->price ? groupDigits(it->price) + " RUB on flea" :
+                        (it && it->noFlea ? "Not on flea" : "No flea price");
+    ui.text(x + 74, y + 48, a.caliber + "   " + std::to_string(a.speed) + " m/s   " + price + (a.tracer ? "   Tracer" : ""),
+            FS_SMALL, col::dim, w - 90);
+    // Rough armor class effectiveness from penetration alone.
+    int cx = x + 14, cy = y + 84;
+    ui.text(cx, cy + 4, "vs armor class", FS_SMALL, col::dim);
+    cx += 150;
+    int cw = (x + w - 14 - cx) / 6;
+    for (int c = 1; c <= 6; c++) {
+        int margin = a.pen - c * 10;
+        SDL_Color k = margin >= 10 ? col::good : margin >= 0 ? SDL_Color{160, 196, 96, 255} :
+                      margin >= -5 ? col::warn : col::bad;
+        ui.fill(cx + (c - 1) * cw, cy, cw - 4, 30, SDL_Color{k.r, k.g, k.b, 70});
+        std::string t = std::to_string(c);
+        ui.text(cx + (c - 1) * cw + (cw - 4 - ui.measure(t, FS_SMALL)) / 2, cy + 3, t, FS_SMALL, k);
+    }
 }
 
 void App::drawItemDetail(const std::string &id, int x, int y, int w) {
@@ -2832,7 +3045,6 @@ void App::drawDatabase() {
     drawDbHeader();
     switch (dbSection) {
     case DB_QUESTS: drawQuestList(); break;
-    case DB_AMMO: drawAmmo(); break;
     case DB_KEYS: drawKeys(); break;
     case DB_ITEMS: drawDbItems(); break;
     }
@@ -3010,6 +3222,7 @@ void App::draw() {
     case TAB_CRAFTS: drawCrafts(); break;
     case TAB_TIMERS: drawTimers(); break;
     case TAB_MAPS: drawMaps(); break;
+    case TAB_AMMO: drawAmmo(); break;
     case TAB_DATABASE: drawDatabase(); break;
     case TAB_PROFILE: drawProfile(); break;
     case TAB_SETTINGS: drawSettings(); break;
