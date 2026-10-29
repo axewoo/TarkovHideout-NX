@@ -33,5 +33,12 @@ for url in ("https://players.tarkov.dev/profile/8560316.json", "https://players.
         show("skills.Common[:3]", (p.get("skills") or {}).get("Common", [])[:3], 500)
         show("pmcStats", p.get("pmcStats"), 1200)
         show("updated", p.get("updated"), 100)
+        h = p.get("hideout") or {}
+        show("hideout keys", sorted(h.keys()) if isinstance(h, dict) else type(h).__name__, 400)
+        if isinstance(h, dict):
+            for k, v in h.items():
+                show(f"hideout.{k}", v[:3] if isinstance(v, list) else v, 700)
+        show("achievements", dict(list((p.get("achievements") or {}).items())[:3]) if isinstance(p.get("achievements"), dict) else p.get("achievements"), 300)
+        show("scavStats", p.get("scavStats"), 400)
     except Exception as e:
         print("profile fetch failed", url, e)

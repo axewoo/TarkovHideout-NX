@@ -143,6 +143,7 @@ class Resolver:
         self.traders = traders
         self.stations = stations
         self.missing = set()
+        self.used = {}  # item id -> (iconLink, backgroundColor)
 
     def item(self, value):
         iid = ref_id(value)
@@ -151,6 +152,7 @@ class Resolver:
             self.missing.add(iid)
             return iid or "?", iid or "?", iid or ""
         name = raw.get("name") or iid
+        self.used[iid] = (raw.get("iconLink"), raw.get("backgroundColor") or "default")
         return name, raw.get("shortName") or name, iid
 
     def trader(self, value):
@@ -189,7 +191,7 @@ def craft_items(res, entries):
         attrs = e.get("attributes")
         if isinstance(attrs, dict) and attrs.get("tool"):
             short += " (tool)"
-        out.append({"n": name, "s": short, "c": count_of(e)})
+        out.append({"i": iid, "n": name, "s": short, "c": count_of(e)})
     return out
 
 
@@ -271,6 +273,15 @@ def build_mode(mode):
         })
     craft_out.sort(key=lambda c: (res.station(c["st"]), c["lvl"], c["rew"][0]["n"] if c["rew"] else ""))
 
+    skills = {}
+    levels_exp = []
+    if isinstance(items_data, dict):
+        for sk in records(items_data.get("skills")):
+            if sk.get("id"):
+                skills[sk["id"]] = sk.get("name") or sk["id"]
+        levels_exp = [int(l.get("exp") or 0) for l in sorted(records(items_data.get("playerLevels")),
+                                                             key=lambda l: l.get("level", 0))]
+
     n_levels = sum(len(s["levels"]) for s in stations)
     print(f"[{mode}] {len(stations)} stations, {n_levels} levels, {len(craft_out)} crafts, "
           f"{len(items)} items in catalog, {len(res.missing)} unresolved item ids")
@@ -282,17 +293,35 @@ def build_mode(mode):
         "generated": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "stations": stations,
         "crafts": craft_out,
-    }
+        "items": {iid: {"bg": bg} for iid, (link, bg) in sorted(res.used.items())},
+        "skills": skills,
+        "levelExp": levels_exp,
+    }, res.used
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("out")
     ap.add_argument("--modes", default="pve,regular")
+    ap.add_argument("--assets", action="store_true", help="also build the icon atlas and map images")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
+    built = []
+    used = {}
     for mode in args.modes.split(","):
-        data = build_mode(mode)
+        data, mode_used = build_mode(mode)
+        used.update(mode_used)
+        built.append((mode, data))
+    if args.assets:
+        import build_assets  # needs Pillow and cairosvg, only installed in the data workflow
+        atlas = build_assets.build_icons(used, args.out)
+        for _, data in built:
+            for iid, meta in data["items"].items():
+                if iid in atlas:
+                    meta["ic"] = atlas[iid]
+        for mode, _ in built:
+            build_assets.build_maps(mode, args.out)
+    for mode, data in built:
         name = "pvp" if mode == "regular" else mode
         path = os.path.join(args.out, f"hideout-{name}.json")
         with open(path, "w", encoding="utf-8") as f:
