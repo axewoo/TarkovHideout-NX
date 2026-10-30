@@ -178,6 +178,8 @@ While you pick, the stats panel on the left previews the highlighted mod against
 
 Prices are the lowest flea offer when the data was built (it refreshes daily), or the cheapest trader offer if that's lower. Settings > *Trader levels, for prices* sets your loyalty level with each trader, so the builder only quotes offers you can buy. Offers locked behind a quest count once you've done it (after a TarkovTracker sync).
 
+<img src="docs/screenshots/trader-levels.jpg" alt="Trader levels" width="50%">
+
 Stats use the game's formulas on tarkov.dev's numbers: ergonomics and recoil match the game's default build for every weapon. Your skills and the ammo you load aren't counted.
 
 ## Quests
