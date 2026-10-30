@@ -281,7 +281,8 @@ class Db:
             hb = (it.get("handbookCategories") or [None])[0]
             cat = (self.handbook.get(b.ref_id(hb)) or {}).get("name") if isinstance(self.handbook, dict) else None
             rec = {"n": it.get("name") or iid, "s": it.get("shortName") or "", "c": cat or ""}
-            price = it.get("avg24hPrice") or it.get("lastLowPrice")
+            # The cheapest offer up now: the 24 hour average is dragged up by a few silly listings.
+            price = it.get("lastLowPrice") or it.get("avg24hPrice")
             if price:
                 rec["p"] = int(price)
             sell = best_sell(it, self.traders)
@@ -323,7 +324,7 @@ class Db:
             quest = self.task_names.get(b.ref_id(o.get("taskUnlock")), "") if o.get("taskUnlock") else ""
             out.append([self.trader_name(o.get("trader")), o.get("minTraderLevel") or 1, int(price), quest or ""])
         out.sort(key=lambda o: o[2])
-        return out[:3]
+        return out
 
     def guns(self):
         """Weapons, the mods that fit them and their stats, for the gun builder.

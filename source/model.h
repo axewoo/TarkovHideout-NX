@@ -223,6 +223,7 @@ struct State {
     bool hideLocked = false;           // hide quests the player can't take yet (needs a sync)
     int playerLevel = 0;
     std::map<std::string, std::string> gunBuilds;  // weapon id -> encodeBuild() of the last build
+    std::map<std::string, int> traderLevels;       // trader name -> loyalty level; missing means any
     std::string faction;               // "USEC" or "BEAR" from TarkovTracker, empty when unknown
 
     // Number of consecutive levels built from level 1.

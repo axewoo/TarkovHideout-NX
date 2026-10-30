@@ -637,6 +637,14 @@ private:
     bool themePicking = false;
     int themeSel = 0, themeBefore = 0;
 
+    // Trader levels (Settings): which trader offers the gun builder may quote
+    void inputTraderLevels();
+    void drawTraderLevels();
+    bool traderPicking = false;
+    int traderSel = 0;
+    mutable std::set<std::string> doneQuestNames;
+    mutable size_t doneQuestKey = (size_t)-1;
+
     void rebuildNeeded();
     std::vector<const Craft *> visibleCrafts() const;
     const Craft *craftById(const std::string &id) const;
@@ -1800,8 +1808,12 @@ void App::inputProfile() {
         skillScroll = std::min(std::max(0, n - 12), skillScroll + 1);
 }
 
-enum SettingRow { SET_TOKEN, SET_SYNC, SET_SYNC_LAUNCH, SET_HIDE_LOCKED, SET_PROFILE, SET_MODE, SET_THEME, SET_ZOOM, SET_DOWNLOAD,
-                  SET_PICTURES, SET_RESET, SET_COUNT };
+enum SettingRow { SET_TOKEN, SET_SYNC, SET_SYNC_LAUNCH, SET_HIDE_LOCKED, SET_PROFILE, SET_MODE, SET_TRADERS, SET_THEME, SET_ZOOM,
+                  SET_DOWNLOAD, SET_PICTURES, SET_RESET, SET_COUNT };
+
+// Traders that sell gear, in the game's order, for Settings > Trader levels.
+static const char *const kLevelTraders[] = {"Prapor", "Therapist", "Skier", "Peacekeeper", "Mechanic", "Ragman", "Jaeger", "Ref"};
+static const int kLevelTraderCount = 8;
 
 // The rows shown: interface zoom only where the window can change size.
 static std::vector<int> settingRows() {
@@ -1815,6 +1827,10 @@ static std::vector<int> settingRows() {
 void App::inputSettings() {
     if (themePicking) {
         inputThemePicker();
+        return;
+    }
+    if (traderPicking) {
+        inputTraderLevels();
         return;
     }
     auto rows = settingRows();
@@ -1862,6 +1878,10 @@ void App::inputSettings() {
         break;
     case SET_DOWNLOAD: downloadData(false); break;
     case SET_PICTURES: downloadPictures(); break;
+    case SET_TRADERS:
+        traderPicking = true;
+        traderSel = 0;
+        break;
     case SET_THEME:
         themePicking = true;
         themeBefore = themeSel = themeIndex(st.theme);
@@ -2022,6 +2042,79 @@ void App::pointerInput() {
 // ---------------------------------------------------------------- themes
 
 static const int kThemeCols = 4;
+
+void App::inputTraderLevels() {
+    if (in.up() && traderSel > 0)
+        traderSel--;
+    if (in.downDir() && traderSel < kLevelTraderCount - 1)
+        traderSel++;
+    // Any, then LL1 to LL4; A steps up and wraps.
+    int step = in.right() || in.pressed(HidNpadButton_A) ? 1 : in.left() ? -1 : 0;
+    if (step) {
+        std::string name = kLevelTraders[traderSel];
+        auto it = st.traderLevels.find(name);
+        int lv = it == st.traderLevels.end() ? 0 : it->second;
+        lv = in.pressed(HidNpadButton_A) ? (lv + 1) % 5 : std::max(0, std::min(4, lv + step));
+        if (lv == 0)
+            st.traderLevels.erase(name);
+        else
+            st.traderLevels[name] = lv;
+        save();
+    }
+    if (in.pressed(HidNpadButton_B))
+        traderPicking = false;
+}
+
+void App::drawTraderLevels() {
+    ensureDb();
+    const int pitch = 64, rowH = 58, rowW = kW - 460;
+    for (int i = 0; i < kLevelTraderCount; i++) {
+        std::string name = kLevelTraders[i];
+        int y = kTop + i * pitch;
+        bool on = i == traderSel;
+        onTap(16, y, rowW, rowH, [this, i](int) {
+            if (traderSel == i)
+                press(HidNpadButton_A);
+            traderSel = i;
+        });
+        ui.fill(16, y, rowW, rowH, on ? col::panelHi : col::panel);
+        if (on)
+            ui.fill(16, y, 4, rowH, col::accent);
+        int tx = 36;
+        auto ic = db.traderIcons.find(name);
+        bool missing;
+        if (SDL_Texture *t = ic == db.traderIcons.end() ? nullptr : picture(traderPics, ic->second, missing)) {
+            SDL_FRect dst{30.f, float(y + 5), 48.f, 48.f};
+            ui.image(t, nullptr, &dst);
+            tx = 92;
+        }
+        ui.text(tx, y + rowH / 2 - 13, name, FS_BODY, col::text, 300);
+        auto it = st.traderLevels.find(name);
+        std::string v = it == st.traderLevels.end() ? "Any level" : "Loyalty level " + std::to_string(it->second);
+        ui.textRight(rowW - 4, y + rowH / 2 - 10, v, FS_SMALL,
+                     it == st.traderLevels.end() ? col::dim : col::accent);
+    }
+    int x = kW - 420, y = kTop;
+    ui.fill(x, y, 404, kBottom - y, col::panel);
+    ui.text(x + 16, y + 10, "Trader levels", FS_BODY, col::accent);
+    y += 50;
+    const char *notes[] = {
+        "The gun builder quotes the cheapest",
+        "offer you can actually buy: trader",
+        "offers above these levels are left",
+        "out, and so are offers locked behind",
+        "a quest you haven't done yet.",
+        "",
+        "Any level counts every offer, like",
+        "before. Flea prices are the lowest",
+        "offer up when the data was built.",
+    };
+    for (const char *n : notes) {
+        ui.text(x + 16, y, n, FS_SMALL, col::dim, 372);
+        y += 26;
+    }
+    drawFooter({{"</>", "Level"}, {"A", "Next level"}, {"B", "Done"}});
+}
 
 void App::inputThemePicker() {
     int n = themes().size();
@@ -4273,10 +4366,25 @@ static void collectMods(const std::vector<BuildNode> &nodes, std::vector<std::st
 
 // Cheapest way to buy an item: a trader offer or the flea market. Price 0 when neither.
 App::GunPrice App::gunPrice(const std::string &id, const std::vector<GunOffer> &offers) const {
+    // Quest-locked offers count once the quest is done; with no quest progress at all, they all count.
+    size_t key = st.tasksDone.size() * 100003 + db.quests.size();
+    if (key != doneQuestKey) {
+        doneQuestKey = key;
+        doneQuestNames.clear();
+        for (const auto &q : db.quests)
+            if (st.tasksDone.count(q.id))
+                doneQuestNames.insert(q.name);
+    }
     GunPrice best;
-    for (const auto &o : offers)
+    for (const auto &o : offers) {
+        auto lv = st.traderLevels.find(o.trader);
+        if (lv != st.traderLevels.end() && o.level > lv->second)
+            continue;
+        if (!o.quest.empty() && !st.tasksDone.empty() && !doneQuestNames.count(o.quest))
+            continue;
         if (o.price > 0 && (best.price == 0 || o.price < best.price))
             best = {o.price, o.trader + " LL" + std::to_string(o.level), o.quest};
+    }
     const DbItem *it = db.item(id);
     if (it && it->price > 0 && !it->noFlea && (best.price == 0 || it->price < best.price))
         best = {it->price, "Flea", ""};
@@ -4684,6 +4792,10 @@ void App::drawGuns() {
         y += 30;
         if (s.price)
             ui.text(rx + 16, y, "Build total: about " + groupDigits(s.price) + " RUB", FS_SMALL, col::accent, rw - 32);
+        y += 30;
+        if (!data.generated.empty())
+            ui.text(rx + 16, y, "Prices from " + data.generated.substr(0, 10) + ", lowest flea offer", FS_SMALL,
+                    col::faint, rw - 32);
     }
     std::vector<std::pair<std::string, std::string>> hints = {{"A", "Build"}, {"Y", "Search"}, {"</>", "Type"}};
     if (!gunSearch.empty())
@@ -4766,8 +4878,10 @@ void App::drawGunBuilder() {
         }
     }
     if (shown.price)
-        ui.text(sx + 16, kBottom - 30, "Build total: about " + groupDigits(shown.price) + " RUB", FS_SMALL, col::accent,
-                sw - 32);
+        ui.text(sx + 16, kBottom - 30,
+                "Build total: about " + groupDigits(shown.price) + " RUB" +
+                    (data.generated.empty() ? "" : "  (prices " + data.generated.substr(5, 5) + ")"),
+                FS_SMALL, col::accent, sw - 32);
 
     if (gunPicking && gunSlotSel < n) {
         drawGunPicker(gunSlots[gunSlotSel], ax, aw);
@@ -5255,6 +5369,10 @@ void App::drawSettings() {
         drawThemePicker();
         return;
     }
+    if (traderPicking) {
+        drawTraderLevels();
+        return;
+    }
     std::string tok = st.token.empty() ? "not set" : "..." + st.token.substr(st.token.size() > 4 ? st.token.size() - 4 : 0);
     struct Row {
         std::string label, value;
@@ -5266,6 +5384,8 @@ void App::drawSettings() {
         {"Hide quests I can't take yet", st.lastSync.empty() ? "Off (sync first)" : st.hideLocked ? "On" : "Off"},
         {"tarkov.dev profile ID", st.profileId.empty() ? "not set" : st.profileId},
         {"Game mode", st.mode == "pve" ? "PVE" : "PVP"},
+        {"Trader levels, for prices", st.traderLevels.empty() ? "any level"
+                                      : "set for " + std::to_string(st.traderLevels.size()) + " traders"},
         {"Theme", themes()[themeIndex(st.theme)].name},
         {"Interface zoom", std::to_string(nxZoom()) + "%   " + nxButtonLabel("</>")},
         {"Download latest data, icons and maps", data.empty() ? "no data" : data.generated},
@@ -5274,8 +5394,7 @@ void App::drawSettings() {
     };
     auto shown = settingRows();
     int n = shown.size();
-    // Ten rows still leave room for the wiki pictures note above the footer.
-    const int pitch = n > 9 ? 49 : 52, rowH = pitch - 6, rowW = kW - 460;
+    const int pitch = n > 11 ? 46 : n > 9 ? 49 : 52, rowH = pitch - 6, rowW = kW - 460;
     settingsList.clamp(n, n);
     for (int k = 0; k < n; k++) {
         int i = shown[k];
@@ -5305,19 +5424,6 @@ void App::drawSettings() {
         ui.text(36, y + rowH / 2 - 13, rows[i].label, FS_BODY, i == SET_RESET && confirmReset ? col::warn : col::text, 500);
         ui.textRight(rowW - 4, y + rowH / 2 - 10, rows[i].value, FS_SMALL, i == SET_ZOOM ? col::accent : col::dim);
     }
-    if (!shown.empty() && shown[settingsList.sel] == SET_PICTURES) {
-        int ny = kTop + n * pitch + 8;
-        const char *warn[] = {
-            "Heads up: this makes about a thousand downloads in a row.",
-            "They come from this app's GitHub copy of the pictures, never",
-            "from the wiki, so Fandom does not see them. GitHub can still",
-            "rate limit you for a while if you repeat it often.",
-        };
-        for (const char *w : warn) {
-            ui.text(36, ny, w, FS_SMALL, col::bad, 780);
-            ny += 24;
-        }
-    }
     int x = kW - 420, y = kTop;
     ui.fill(x, y, 404, kBottom - y, col::panel);
     ui.text(x + 16, y + 10, "About", FS_BODY, col::accent);
@@ -5343,10 +5449,27 @@ void App::drawSettings() {
         "Game data, icons and maps come",
         "from tarkov.dev, refreshed daily.",
     };
-    for (const char *n : notes) {
-        ui.text(x + 16, y, n, FS_SMALL, col::dim, 372);
-        y += 26;
-    }
+    // The wiki pictures row gets its warning here instead.
+    const char *warn[] = {
+        "Heads up: this makes about a",
+        "thousand downloads in a row. They",
+        "come from this app's GitHub copy of",
+        "the pictures, never from the wiki,",
+        "so Fandom does not see them. GitHub",
+        "can still rate limit you for a while",
+        "if you repeat it often.",
+    };
+    bool pictures = !shown.empty() && shown[settingsList.sel] == SET_PICTURES;
+    if (pictures)
+        for (const char *w : warn) {
+            ui.text(x + 16, y, w, FS_SMALL, col::bad, 372);
+            y += 26;
+        }
+    else
+        for (const char *n : notes) {
+            ui.text(x + 16, y, n, FS_SMALL, col::dim, 372);
+            y += 26;
+        }
     drawFooter({{"A", "Select"}, {"+", "Quit"}});
 }
 

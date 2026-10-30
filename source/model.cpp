@@ -472,6 +472,11 @@ bool loadState(const std::string &path, State &st) {
     for (auto &[k, v] : builds.items())
         if (v.is_string())
             st.gunBuilds[k] = v.get<std::string>();
+    st.traderLevels.clear();
+    const json levels = j.value("traderLevels", json::object());
+    for (auto &[k, v] : levels.items())
+        if (v.is_number_integer())
+            st.traderLevels[k] = v.get<int>();
     st.kappaFound.clear();
     for (const auto &k : j.value("kappaFound", json::array()))
         if (k.is_string())
@@ -516,6 +521,7 @@ bool saveState(const std::string &path, const State &st) {
     j["faction"] = st.faction;
     j["kappaFound"] = st.kappaFound;
     j["gunBuilds"] = st.gunBuilds;
+    j["traderLevels"] = st.traderLevels;
     json mods = json::object();
     for (auto &[k, v] : st.modules)
         if (v)
