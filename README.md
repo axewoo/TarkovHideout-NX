@@ -165,11 +165,16 @@ Every round with damage, penetration, armor damage and fragmentation, filterable
 
 ## Gun builder
 
-<img src="docs/screenshots/guns.jpg" alt="Gun builder with slot boxes and stats">
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/guns.jpg" alt="Gun builder with slot boxes and stats"></td>
+<td width="50%"><img src="docs/screenshots/guns-pick.jpg" alt="Picking a muzzle device with a live stats preview"></td>
+</tr>
+</table>
 
 Try builds outside the game. The Guns tab lists every weapon by type (Left / Right) with its default build. Press A to open the builder: the weapon's slots sit under its picture as boxes, like the game's modding screen, and the mods installed in a slot add their own slots next to it. Press A on a slot to pick from every mod that fits, with its effect on ergonomics, recoil, accuracy and velocity and its cheapest price. Mods that clash with the rest of the build are marked, and required slots left empty turn red.
 
-The stats panel follows every change: ergonomics, vertical and horizontal recoil, accuracy, muzzle velocity, weight, sighting range and magazine size, each compared with the default build, plus the total price from traders or the flea market. Builds are saved per weapon. Y goes back to the default build and Minus strips every mod.
+While you pick, the stats panel on the left previews the highlighted mod against your current build. Swapping a part keeps whatever is mounted on it that also fits the new one. The panel follows every change: ergonomics, vertical and horizontal recoil, accuracy, muzzle velocity, weight, sighting range and magazine size, each compared with the default build, plus the total price from traders or the flea market. Builds are saved per weapon. Y goes back to the default build and Minus strips every mod.
 
 Stats use the game's formulas on tarkov.dev's numbers: ergonomics and recoil match the game's default build for every weapon. Your skills and the ammo you load aren't counted.
 
