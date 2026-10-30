@@ -292,6 +292,9 @@ bool parseDatabase(const std::string &text, Database &out, std::string &err) {
         for (const auto &r : q.traderReqs)
             if (r.size() > q.trader.size() + 3 && r.compare(0, q.trader.size() + 3, q.trader + " LL") == 0)
                 q.loyalty = std::max(1, atoi(r.c_str() + q.trader.size() + 3));
+        q.group = t.contains("g") ? num(t, "g") : q.loyalty;
+        q.groupOrder = t.contains("go") ? num(t, "go") : q.group * 2000 + q.level;
+        q.chainHead = str(t, "gh");
         // Quests come sorted in the game's trader order; keep it for the filter.
         if (std::find(d.traders.begin(), d.traders.end(), q.trader) == d.traders.end())
             d.traders.push_back(q.trader);

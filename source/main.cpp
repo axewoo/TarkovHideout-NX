@@ -2282,11 +2282,12 @@ void App::filterDb() {
                 continue;
             dbRows.push_back(i);
         }
-        // Grouped like the game: trader, then loyalty level, then player level.
+        // Grouped like the game: trader, then its sections (loyalty levels, Essential tasks last) in the game's order.
+        auto section = [](const Quest &q) { return q.group == 0 ? 5 : q.group; };
         std::stable_sort(dbRows.begin(), dbRows.end(), [&](int a, int b) {
             const Quest &x = db.quests[a], &y = db.quests[b];
-            return std::make_tuple(rank[x.trader], x.loyalty, x.level, x.name) <
-                   std::make_tuple(rank[y.trader], y.loyalty, y.level, y.name);
+            return std::make_tuple(rank[x.trader], section(x), x.groupOrder, x.name) <
+                   std::make_tuple(rank[y.trader], section(y), y.groupOrder, y.name);
         });
         break;
     }
@@ -3598,7 +3599,8 @@ void App::drawQuestList() {
     int selLine = 0;
     for (int k = 0; k < (int)dbRows.size(); k++) {
         const Quest &q = db.quests[dbRows[k]];
-        std::string head = (several ? q.trader + "   " : "") + "LOYALTY LEVEL " + std::to_string(q.loyalty);
+        std::string sec = q.group == 0 ? "ESSENTIAL TASKS" : q.group < 0 ? "QUESTS" : "LOYALTY LEVEL " + std::to_string(q.group);
+        std::string head = several ? q.trader + "   " + sec : sec;
         if (head != last) {
             lines.push_back({-1, head});
             last = head;
@@ -3640,16 +3642,21 @@ void App::drawQuestList() {
         ui.fill(16, y, lw - 14, rowH - 4, on ? col::panelHi : col::panel);
         if (on)
             ui.fill(16, y, 4, rowH - 4, col::accent);
+        // Finished chain quests fold under their Essential quest, indented like in the game.
+        int ix = q.chainHead.empty() ? 0 : 24;
+        if (ix)
+            ui.fill(30, y - 4, 2, rowH, col::line);
         // Status mark: done, locked (a small padlock) or ready to take.
         int my = y + (rowH - 4) / 2;
+        int mx = 36 + ix;
         if (done) {
-            ui.disc(36, my, 7, col::good);
+            ui.disc(mx, my, 7, col::good);
         } else if (locked) {
-            ui.rect(32, my - 9, 9, 8, col::faint);
-            ui.fill(29, my - 2, 15, 10, col::faint);
+            ui.rect(mx - 4, my - 9, 9, 8, col::faint);
+            ui.fill(mx - 7, my - 2, 15, 10, col::faint);
         } else {
-            ui.disc(36, my, 7, col::accent);
-            ui.disc(36, my, 4, on ? col::panelHi : col::panel);
+            ui.disc(mx, my, 7, col::accent);
+            ui.disc(mx, my, 4, on ? col::panelHi : col::panel);
         }
         int right = lw - 10;
         if (q.kappa)
@@ -3657,7 +3664,7 @@ void App::drawQuestList() {
         if (q.level > 1)
             right -= ui.textRight(right - 4, y + 7, "Lv " + std::to_string(q.level), FS_SMALL,
                                   locked && knownPlayerLevel() > 0 && q.level > knownPlayerLevel() ? col::bad : col::dim) + 10;
-        ui.text(54, y + 6, q.name, FS_BODY, done ? col::dim : (locked ? col::faint : col::text), right - 60);
+        ui.text(54 + ix, y + 6, q.name, FS_BODY, done ? col::dim : (locked ? col::faint : col::text), right - 60 - ix);
     }
     drawScrollbar(lw + 4, top, visible * rowH, nl, visible, questScroll);
     if (!dbRows.empty())
@@ -3682,7 +3689,7 @@ void App::drawQuestDetail(const Quest &q, int x, int y, int w, int h) {
         tx = x + 84;
     }
     ui.text(tx, y + 10, q.name, FS_TITLE, col::text, x + w - tx - 16);
-    std::string sub = q.trader + "   Loyalty level " + std::to_string(q.loyalty) +
+    std::string sub = q.trader + "   Loyalty level " + std::to_string(q.group >= 1 ? q.group : q.loyalty) +
                       (q.map.empty() ? "" : "   " + q.map);
     ui.text(tx, y + 46, sub, FS_SMALL, col::dim, x + w - tx - 16);
     int cy = y + 82, bx = x + 16;

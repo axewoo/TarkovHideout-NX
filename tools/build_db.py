@@ -234,6 +234,7 @@ class Db:
             rank = TRADER_ORDER.index(t["tr"]) if t["tr"] in TRADER_ORDER else len(TRADER_ORDER)
             return rank, t["tr"], t["lvl"], t["n"]
         tasks = sorted((self.task(t) for t in self.tasks), key=order)
+        apply_quest_groups(tasks)
         key_quests = {}
         for t in tasks:
             for k in t.get("keys", []):
@@ -312,6 +313,84 @@ class Db:
             traders.append({"n": tr["name"], "img": f"traders/{slug}.jpg", "src": tr.get("imageLink") or ""})
         return {"version": 1, "mode": "pvp" if self.mode == "regular" else self.mode, "items": items,
                 "ammo": ammo, "keys": keys, "tasks": tasks, "traders": traders}
+
+
+QUEST_GROUPS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quest_groups.json")
+
+
+def apply_quest_groups(tasks):
+    """Sorts quests into the game's sections: "g" is the loyalty level section (1-4), 0 for Essential
+    tasks, -1 for traders without sections (Lightkeeper, BTR Driver); "go" orders them like the game
+    and "gh" names the Essential quest a finished chain folds under. Quests the screenshots don't show
+    follow the quest before them, else the loyalty level tarkov.dev gives."""
+    try:
+        with open(QUEST_GROUPS, encoding="utf-8") as f:
+            groups = json.load(f)
+    except (OSError, ValueError):
+        return
+    norm = lambda n: (n or "").replace("\u2019", "'").strip().lower()
+    known = {}
+    for trader, sec in groups.items():
+        if not isinstance(sec, dict):
+            continue
+        for lv in range(1, 5):
+            for i, n in enumerate(sec.get(f"LL{lv}", [])):
+                known[(trader, norm(n))] = (lv, lv * 1000 + i, "")
+        for ci, chain in enumerate(sec.get("essential", [])):
+            for i, n in enumerate(chain):
+                known[(trader, norm(n))] = (0, 5000 + ci * 100 + i, chain[0] if i else "")
+    by_name = {}
+    for t in tasks:
+        by_name.setdefault(norm(t["n"]), []).append(t)
+    placed = {}
+
+    def place(t, depth=0):
+        key = id(t)
+        if key in placed:
+            return placed[key]
+        k = (t["tr"], norm(t["n"]))
+        if t["tr"] not in groups:
+            # No sections in the game: one list, earlier quests first.
+            d = 0
+            for p in t.get("pre", []):
+                for q in by_name.get(norm(p), []):
+                    if q["tr"] == t["tr"] and depth < 40:
+                        d = max(d, place(q, depth + 1)[1] + 1)
+            placed[key] = (-1, d, "")
+        elif k in known:
+            placed[key] = known[k]
+        else:
+            res = None
+            for p in t.get("pre", []):
+                for q in by_name.get(norm(p), []):
+                    if q["tr"] == t["tr"] and depth < 40:
+                        g, o, h = place(q, depth + 1)
+                        # Follows its prerequisite. In Essential tasks it comes after that chain's block
+                        # as its own entry, since the game shows the newest quest of a chain on top.
+                        if g == 0:
+                            base = o // 100 * 100
+                            cand = (0, max(o, base + 49) + 1, "")
+                        else:
+                            cand = (g, o + 0.5, "")
+                        if res is None or cand[1] > res[1]:
+                            res = cand
+            if res is None:
+                lv = 1
+                for r in t.get("trl", []):
+                    if r.startswith(t["tr"] + " LL"):
+                        lv = max(1, min(4, int(r.rsplit("LL", 1)[1] or 1)))
+                res = (lv, lv * 1000 + 900, "")
+            placed[key] = res
+        return placed[key]
+
+    for t in tasks:
+        place(t)
+    for t in tasks:
+        g, o, h = placed[id(t)]
+        t["g"] = g
+        t["go"] = round(o * 2)
+        if h:
+            t["gh"] = h
 
 
 TRADER_ICON_PX = 128

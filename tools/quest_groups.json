@@ -1,0 +1,573 @@
+{
+ "_about": "How the game groups each trader's quests (loyalty level sections and Essential tasks with their folded chains), read off in-game screenshots of PvE 1.3.0.0.48484 on 2026-10-29. Quests not listed follow the quest before them; see tools/build_db.py apply_quest_groups.",
+ "Prapor": {
+  "LL1": [
+   "Luxurious Life",
+   "Bad Rep Evidence",
+   "Background Check",
+   "Shootout Picnic",
+   "Belka and Strelka",
+   "Debut",
+   "Search Mission",
+   "Power of Persuasion",
+   "Oil Run",
+   "Shaking Up the Teller",
+   "Shooting Cans"
+  ],
+  "LL2": [
+   "Grenadier",
+   "Ice Cream Cones",
+   "Glory to CPSU",
+   "Anesthesia",
+   "Properties All Around",
+   "Capturing Outposts",
+   "Kings of the Rooftops",
+   "You've Got Mail",
+   "Delivery From the Past",
+   "District Patrol",
+   "Postman Pat - Part 1",
+   "Job for a Patriot",
+   "Possessor"
+  ],
+  "LL3": [
+   "Easy-Breezy",
+   "Special Comms",
+   "No Place for Renegades",
+   "Documents",
+   "The Tarkov Import",
+   "Easy Job",
+   "Reconnaissance",
+   "The Bunker",
+   "Ironclad Proof"
+  ],
+  "LL4": [
+   "The Art of Explosion",
+   "Unique Experience",
+   "Intimidator",
+   "Best Job in the World",
+   "Escort",
+   "Special Order",
+   "Regulated Materials",
+   "Getting Some Air"
+  ],
+  "essential": [
+   [
+    "The Punisher - Part 4",
+    "The Punisher - Part 1",
+    "The Punisher - Part 2",
+    "The Punisher - Part 3"
+   ],
+   [
+    "Big Customer"
+   ],
+   [
+    "Stick in the Wheel",
+    "Shipping Delay - Part 1",
+    "Forge a Friendship",
+    "Half-Empty"
+   ]
+  ]
+ },
+ "Therapist": {
+  "LL1": [
+   "Pharmacist",
+   "Shipment Tracking",
+   "Operation Aquarius",
+   "First in Line",
+   "Blood in the Water",
+   "Fall Ailment",
+   "Shortage",
+   "Supply Plans",
+   "Abandoned Cargo"
+  ],
+  "LL2": [
+   "Aid Stations",
+   "The Tarkov Butcher",
+   "All Is Revealed",
+   "General Wares",
+   "Sanitary Standards",
+   "Urban Medicine",
+   "Paramedic",
+   "Population Census",
+   "Pets Won't Need It"
+  ],
+  "LL3": [
+   "Disease History",
+   "Car Repair",
+   "Tarkov-Style Diplomacy",
+   "Drug Trafficking",
+   "Seaside Vacation",
+   "Invasive Therapy",
+   "Charity",
+   "Lost Contact",
+   "Colleagues"
+  ],
+  "LL4": [
+   "Beneath The Streets",
+   "Crisis",
+   "Decontamination Service"
+  ],
+  "essential": [
+   [
+    "This Tape Sucks"
+   ],
+   [
+    "Out of Curiosity"
+   ],
+   [
+    "Health Care Privacy - Part 6",
+    "Health Care Privacy - Part 1",
+    "Health Care Privacy - Part 2",
+    "Health Care Privacy - Part 3",
+    "Health Care Privacy - Part 4",
+    "Health Care Privacy - Part 5"
+   ],
+   [
+    "Halloween: Follow-Up Examination"
+   ],
+   [
+    "Postman Pat - Part 2"
+   ],
+   [
+    "A Healthy Alternative"
+   ],
+   [
+    "A Difficult Choice"
+   ]
+  ]
+ },
+ "Fence": {
+  "essential": [
+   [
+    "Friend Among Strangers",
+    "Establish Contact"
+   ],
+   [
+    "Is This a Reference?"
+   ],
+   [
+    "Between Two Fires [PVE ZONE]"
+   ],
+   [
+    "Against the Conscience - Part 1 [PVE ZONE]"
+   ]
+  ]
+ },
+ "Skier": {
+  "LL1": [
+   "Supplier",
+   "Golden Swag",
+   "The Extortionist",
+   "Informed Means Armed",
+   "Private Club",
+   "Burning Rubber",
+   "No Swiping",
+   "What's on the Flash Drive?",
+   "Polikhim Hobo"
+  ],
+  "LL2": [
+   "Beyond the Red Meat",
+   "Chumming",
+   "Supplements",
+   "Setup",
+   "The Walls Have Eyes",
+   "Vitamins",
+   "The Secret Recipe",
+   "Friend From the West",
+   "Exit Here",
+   "Stirrup",
+   "House Arrest"
+  ],
+  "LL3": [
+   "Missing Cargo",
+   "Safe Corridor",
+   "Rigged Game",
+   "Pyramid Scheme",
+   "Top Secret",
+   "Classified Technologies",
+   "From Hand to Hand",
+   "Long Road",
+   "Stimulating Demand"
+  ],
+  "LL4": [
+   "Silent Caliber",
+   "Bullshit"
+  ],
+  "essential": [
+   [
+    "Indisputable Authority"
+   ],
+   [
+    "Fair Price - Part 2",
+    "Fair Price - Part 1"
+   ],
+   [
+    "Chemical - Part 4",
+    "Chemical - Part 1",
+    "Chemical - Part 2",
+    "Chemical - Part 3"
+   ],
+   [
+    "Route Deviation",
+    "The Higher They Fly"
+   ],
+   [
+    "A Familiar Face..."
+   ],
+   [
+    "Halloween: The Best Defense",
+    "Halloween: Rumors"
+   ],
+   [
+    "Irresistible"
+   ],
+   [
+    "Easy Money - Part 1 [PVE ZONE]"
+   ]
+  ]
+ },
+ "Peacekeeper": {
+  "LL1": [
+   "New Paths",
+   "One Less Loose End",
+   "Seizing the Initiative",
+   "Chemical Experiments",
+   "Tigr Safari",
+   "Master Key",
+   "Hiking",
+   "Fuel Shortage",
+   "Metal Birds"
+  ],
+  "LL2": [
+   "Secret Message",
+   "The Cult",
+   "Eagle Eye",
+   "I Need More Power",
+   "Fishing Gear",
+   "One-Way Ticket",
+   "Weapons Circulation",
+   "Road Closed",
+   "Humanitarian Supplies",
+   "Revision - Streets of Tarkov",
+   "Your Car Needs a Service",
+   "Scrap Metal"
+  ],
+  "LL3": [
+   "Tracker",
+   "Demonstration Model",
+   "Revision - Lighthouse",
+   "Cargo X",
+   "Revision - Reserve",
+   "Overpopulation"
+  ],
+  "LL4": [
+   "Trophies",
+   "Counteraction",
+   "Peacekeeping Mission",
+   "Samples",
+   "TerraGroup Employee",
+   "Worst Job in the World"
+  ],
+  "essential": [
+   [
+    "Confidential Info"
+   ],
+   [
+    "Wet Job - Part 1"
+   ]
+  ]
+ },
+ "Mechanic": {
+  "LL1": [
+   "Steady Signal",
+   "Saving the Mole",
+   "Passion for Ergonomics",
+   "Gunsmith - AKS-74U",
+   "Bad Habit",
+   "Farming",
+   "The Courier",
+   "Gunsmith - MP-133",
+   "Gunsmith - HK MP5"
+  ],
+  "LL2": [
+   "Watching You",
+   "Playing the Market",
+   "Rat Hunting",
+   "Secrets of Polikhim",
+   "The Secret to Productivity",
+   "Gunsmith - OP-SKS",
+   "Gunsmith - Model 870",
+   "Corporate Perks",
+   "Chemistry Closet",
+   "Black Swan",
+   "Scout",
+   "Surveillance",
+   "Ill-Wisher"
+  ],
+  "LL3": [
+   "Back Door",
+   "Energy Crisis",
+   "Gunsmith - MPX",
+   "Gunsmith - M4A1",
+   "Gunsmith - P226R",
+   "Semiconductor Crisis",
+   "Surplus Goods",
+   "The Door",
+   "Corporate Secrets",
+   "Gunsmith - AK-105",
+   "Gunsmith - AKM",
+   "Fertilizers",
+   "Import",
+   "Gunsmith - AKS-74N",
+   "Gunsmith - Vector 9x19",
+   "Gunsmith - AS VAL"
+  ],
+  "LL4": [
+   "Psycho Sniper",
+   "Setting Priorities",
+   "Calibration",
+   "Shooter Born in Heaven",
+   "Goals and Means"
+  ],
+  "essential": [
+   [
+    "Gunsmith Master - Part 13",
+    "Gunsmith Master - Part 1",
+    "Gunsmith Master - Part 2",
+    "Gunsmith Master - Part 3",
+    "Gunsmith Master - Part 4",
+    "Gunsmith Master - Part 5",
+    "Gunsmith Master - Part 6",
+    "Gunsmith Master - Part 7",
+    "Gunsmith Master - Part 8",
+    "Gunsmith Master - Part 9",
+    "Gunsmith Master - Part 10",
+    "Gunsmith Master - Part 11",
+    "Gunsmith Master - Part 12"
+   ],
+   [
+    "Hypotheses Testing",
+    "Shady Contractor",
+    "Needle in a Haystack",
+    "Hidden Layer",
+    "Offensive Reconnaissance"
+   ],
+   [
+    "Hobby Club"
+   ],
+   [
+    "Broadcast - Part 2",
+    "Broadcast - Part 1"
+   ],
+   [
+    "A Helping Hand"
+   ],
+   [
+    "To the Light - Getting Acquainted"
+   ],
+   [
+    "Introduction"
+   ]
+  ]
+ },
+ "Ragman": {
+  "LL1": [
+   "Fuel Crisis",
+   "Make ULTRA Great Again",
+   "Long Line",
+   "Small Things, Big Help",
+   "Pathfinder",
+   "A Big Loss",
+   "Inventory Files",
+   "Gratitude",
+   "Dressed to Kill"
+  ],
+  "LL2": [
+   "Big Sale",
+   "The Key to Success",
+   "Minibus",
+   "Break the Deal",
+   "Audit",
+   "Nothing Fishy About This",
+   "Dandies",
+   "Supervisor",
+   "Hot Delivery",
+   "Ballet Lover"
+  ],
+  "LL3": [
+   "Audiophile",
+   "A Fuel Matter",
+   "Living High is Not a Crime",
+   "Booze",
+   "Know Your Place!"
+  ],
+  "LL4": [
+   "Antique Enthusiast"
+  ],
+  "essential": [
+   [
+    "Vacate the Premises",
+    "Sensory Analysis - Part 1"
+   ],
+   [
+    "Sew it Good - Part 2",
+    "Sew it Good - Part 1",
+    "Sew it Good - Part 3",
+    "Sew it Good - Part 4"
+   ],
+   [
+    "Drip-Out - Part 1",
+    "Drip-Out - Part 2"
+   ],
+   [
+    "Textile - Part 1"
+   ],
+   [
+    "Combat Proven",
+    "The Invisible Hand",
+    "Circulate",
+    "Special Offer"
+   ],
+   [
+    "Pay the Fare!"
+   ]
+  ]
+ },
+ "Jaeger": {
+  "LL1": [
+   "The Huntsman Path - Trophy",
+   "Rough Tarkov",
+   "Swift",
+   "The Huntsman Path - Angry Watchman",
+   "First Aid",
+   "The Huntsman Path - Woods Keeper",
+   "Acquaintance",
+   "Work Smarter",
+   "The Huntsman Path - Justice",
+   "All This Filth..."
+  ],
+  "LL2": [
+   "The Huntsman Path - Crooked Cop",
+   "Every Hunter Knows This",
+   "Nostalgia",
+   "Courtesy Visit",
+   "The Huntsman Path - Big Game",
+   "Claustrophobia",
+   "Cease Fire!",
+   "The Huntsman Path - Factory Chief",
+   "The Delicious Sausage",
+   "Dragnet",
+   "The Huntsman Path - Sellout"
+  ],
+  "LL3": [
+   "Reserve",
+   "The Hermit",
+   "Forester's Duty",
+   "The Huntsman Path - Liberation",
+   "The Huntsman Path - Secured Perimeter",
+   "The Huntsman Path - Administrator",
+   "Pest Control",
+   "Fishing Place",
+   "The Huntsman Path - Outcasts",
+   "The Huntsman Path - Forest Cleaning",
+   "The Huntsman Path - Eraser"
+  ],
+  "LL4": [
+   "The Huntsman Path - Sadist",
+   "The Huntsman Path - Relentless",
+   "Slaughterhouse",
+   "Stray Dogs",
+   "Hunting Trip",
+   "The Huntsman Path - Control"
+  ],
+  "essential": [
+   [
+    "Broadcast - Part 3"
+   ],
+   [
+    "The Tarkov Shooter - Part 7",
+    "The Tarkov Shooter - Part 1",
+    "The Tarkov Shooter - Part 2",
+    "The Tarkov Shooter - Part 3",
+    "The Tarkov Shooter - Part 4",
+    "The Tarkov Shooter - Part 5",
+    "The Tarkov Shooter - Part 6"
+   ],
+   [
+    "The Huntsman Path - Controller",
+    "The Survivalist Path - Thrifty",
+    "The Survivalist Path - Zhivchik",
+    "The Survivalist Path - Unprotected but Dangerous",
+    "The Survivalist Path - Wounded Beast",
+    "The Survivalist Path - Tough Guy",
+    "The Survivalist Path - Cold Blooded",
+    "The Survivalist Path - Eagle-Owl",
+    "The Survivalist Path - Junkie"
+   ],
+   [
+    "Thirsty - Hounds"
+   ]
+  ]
+ },
+ "Ref": {
+  "essential": [
+   [
+    "Provide Viewership"
+   ],
+   [
+    "Hold the Lead [PVE ZONE]"
+   ],
+   [
+    "Arena Business [PVE ZONE]"
+   ],
+   [
+    "Professional Fitness - Part 1 [PVE ZONE]"
+   ],
+   [
+    "Professional Fitness - Part 2 [PVE ZONE]"
+   ],
+   [
+    "To Great Heights! - Part 6 [PVE ZONE]"
+   ],
+   [
+    "To Great Heights! - Part 5 [PVE ZONE]"
+   ],
+   [
+    "Surprise [PVE ZONE]"
+   ],
+   [
+    "Balancing - Part 1 [PVE ZONE]"
+   ],
+   [
+    "To Great Heights! - Part 4 [PVE ZONE]"
+   ],
+   [
+    "Easy Money - Part 2 [PVE ZONE]"
+   ],
+   [
+    "Against the Conscience - Part 2 [PVE ZONE]"
+   ],
+   [
+    "To Great Heights! - Part 2 [PVE ZONE]"
+   ],
+   [
+    "Create a Distraction - Part 1 [PVE ZONE]"
+   ],
+   [
+    "Create a Distraction - Part 2 [PVE ZONE]"
+   ],
+   [
+    "Decisions, Decisions [PVE ZONE]"
+   ],
+   [
+    "Balancing - Part 2 [PVE ZONE]"
+   ],
+   [
+    "To Great Heights! - Part 1 [PVE ZONE]"
+   ],
+   [
+    "To Great Heights! - Part 3 [PVE ZONE]"
+   ]
+  ]
+ }
+}
