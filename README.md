@@ -3,11 +3,11 @@
 # Tarkov Hideout for Switch, PC and Android
 
 **An offline Escape From Tarkov companion for Nintendo Switch homebrew, Windows, Linux and Android tablets.**
-Hideout planner and craft timers, sharp interactive maps, an ammo chart, a quest screen like the game's, a Kappa tracker and a quest database, in 13 color themes, in your hands between raids or on your second screen while you play.
+Hideout planner and craft timers, sharp interactive maps, an ammo chart, a gun builder, a quest screen like the game's, a Kappa tracker and a quest database, in 13 color themes, in your hands between raids or on your second screen while you play.
 
 ![Maps, ammo chart, trader quests, Kappa tracker, theme picker and hideout stations](docs/screenshots/hero.jpg)
 
-[Install](#install) · [PC](#pc-second-screen) · [Android](#android-tablets-and-chromebooks) · [Hideout](#hideout) · [Maps](#maps) · [Ammo](#ammo) · [Quests](#quests) · [Database](#database) · [Kappa](#kappa) · [Themes](#themes) · [Profile and sync](#profile-and-tarkovtracker-sync) · [Controls](#controls) · [Building](#building)
+[Install](#install) · [PC](#pc-second-screen) · [Android](#android-tablets-and-chromebooks) · [Hideout](#hideout) · [Maps](#maps) · [Ammo](#ammo) · [Gun builder](#gun-builder) · [Quests](#quests) · [Database](#database) · [Kappa](#kappa) · [Themes](#themes) · [Profile and sync](#profile-and-tarkovtracker-sync) · [Controls](#controls) · [Building](#building)
 
 </div>
 
@@ -19,6 +19,7 @@ Hideout planner and craft timers, sharp interactive maps, an ammo chart, a quest
 - **Crafts and timers** right next to your stations, with timers that keep running while the Switch sleeps.
 - **16 maps built from the game's own renders**, sharp up to 16x zoom, with extracts, transits, boss spawns and every floor of the multi-level maps.
 - **An ammo tab** with an eft-ammo style damage vs penetration chart. Pin rounds to compare them.
+- **A gun builder like the game's modding screen**: every weapon and every mod that fits, with live ergonomics, recoil, weight and price against the default build.
 - **A quest screen like the game's**: trader portraits, quests grouped by loyalty level, and a side panel with requirements, objectives and rewards. Hide the quests you can't take yet once you sync.
 - **Catch up your quest history in a few presses**: point at the quests you're on, and everything before them is marked done, on TarkovTracker too.
 - **Quest guides** from the wiki, pictures included, next to objectives, map pins and rewards.
@@ -81,7 +82,7 @@ The PC version is the same app with the same tabs, data and TarkovTracker sync, 
 
   | Key | Action |
   | --- | --- |
-  | 1 to 9 | Jump to a tab |
+  | 1 to 9, 0 | Jump to a tab (0 is Settings) |
   | Q / E, Tab | Previous / next tab |
   | Arrows, Enter, Esc | Move, select, back |
   | PgUp / PgDn | Same as ZL / ZR (floors, sections, levels) |
@@ -161,6 +162,23 @@ Press Minus for a fullscreen map. Quest objectives and key locks open the map wi
 <img src="docs/screenshots/ammo.jpg" alt="Ammo tab with chart">
 
 Every round with damage, penetration, armor damage and fragmentation, filterable by caliber. The chart plots damage against penetration with armor class columns, like [eft-ammo.com](https://eft-ammo.com). Pin up to eight rounds with A to compare them in color. The panel below shows speed, flea price and a rough read of each armor class.
+
+## Gun builder
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/guns.jpg" alt="Gun builder with slot boxes and stats"></td>
+<td width="50%"><img src="docs/screenshots/guns-pick.jpg" alt="Picking a muzzle device with a live stats preview"></td>
+</tr>
+</table>
+
+Try builds outside the game. The Guns tab lists every weapon by type (Left / Right) with its default build. Press A to open the builder: the weapon's slots sit under its picture as boxes, like the game's modding screen, and the mods installed in a slot add their own slots next to it. Press A on a slot to pick from every mod that fits, with its effect on ergonomics, recoil, accuracy and velocity and its cheapest price. Mods that clash with the rest of the build are marked, and required slots left empty turn red.
+
+While you pick, the stats panel on the left previews the highlighted mod against your current build. Swapping a part keeps whatever is mounted on it that also fits the new one. The panel follows every change: ergonomics, vertical and horizontal recoil, accuracy, muzzle velocity, weight, sighting range and magazine size, each compared with the default build, plus the total price from traders or the flea market. Builds are saved per weapon. Y goes back to the default build and Minus strips every mod.
+
+Prices are the lowest flea offer when the data was built (it refreshes daily), or the cheapest trader offer if that's lower. Settings > *Trader levels, for prices* sets your loyalty level with each trader, so the builder only quotes offers you can buy. Offers locked behind a quest count once you've done it (after a TarkovTracker sync).
+
+Stats use the game's formulas on tarkov.dev's numbers: ergonomics and recoil match the game's default build for every weapon. Your skills and the ammo you load aren't counted.
 
 ## Quests
 
@@ -275,6 +293,13 @@ Switch buttons. On PC, see [PC second screen](#pc-second-screen) for the mouse a
 | Ammo | A | Pin or unpin the round on the chart |
 | Ammo | ZL / ZR | Page through the list |
 | Ammo | Y / X | Search / clear search, then clear the chart |
+| Guns | Left / Right | Weapon type |
+| Guns | A | Open the builder |
+| Guns | Y / X | Search / clear search |
+| Gun builder | D-pad, A | Pick a slot, change its mod |
+| Gun builder | X | Remove the mod (and what's on it) |
+| Gun builder | Y / - | Default build / strip all mods |
+| Gun builder | B | Back to the weapon list |
 | Database | ZL / ZR | Switch section: quests, keys, items |
 | Quests | Left / Right | Pick a trader |
 | Quests | X | Show or hide completed quests (clears the search first) |

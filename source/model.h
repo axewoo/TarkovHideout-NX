@@ -139,7 +139,52 @@ struct Quest {
     std::vector<ItemCount> startItems;
 };
 
+// ---- Gun builder (db.guns)
+
+struct GunOffer {
+    std::string trader, quest;  // quest: needed to unlock the offer, empty if none
+    int level = 1, price = 0;
+};
+
+struct GunSlot {
+    std::string name;
+    bool required = false;
+    int set = -1;  // index into Database::modSets: the mods that fit
+};
+
+struct GunMod {
+    float ergo = 0, recoil = 0, accuracy = 0, velocity = 0;  // recoil, accuracy, velocity in %
+    int capacity = 0, sightRange = 0;
+    float zoomMin = 0, zoomMax = 0;
+    std::vector<std::string> conflicts;
+    std::vector<GunOffer> buy;
+    std::vector<GunSlot> slots;
+};
+
+// One installed mod and what is installed on it, by slot index of its parent.
+struct BuildNode {
+    int slot = 0;
+    std::string mod;
+    std::vector<BuildNode> kids;
+};
+
+struct Gun {
+    std::string id, caliber, img;
+    int ergo = 0, recoilV = 0, recoilH = 0, fireRate = 0, sightRange = 0;
+    std::vector<GunOffer> buy;
+    std::vector<GunSlot> slots;
+    std::vector<BuildNode> def;  // the default build
+    bool hasPreset = false;
+    int presetErgo = 0, presetRecoilV = 0, presetRecoilH = 0;  // the game's numbers for the default build
+};
+
+std::string encodeBuild(const std::vector<BuildNode> &nodes);
+std::vector<BuildNode> decodeBuild(const std::string &s);
+
 struct Database {
+    std::vector<Gun> guns;
+    std::map<std::string, GunMod> mods;
+    std::vector<std::vector<std::string>> modSets;
     std::map<std::string, DbItem> items;
     std::vector<Ammo> ammo;
     std::vector<KeyInfo> keys;
@@ -177,7 +222,9 @@ struct State {
     std::set<std::string> tasksLocal;  // quests marked done in the app; kept across syncs
     bool hideLocked = false;           // hide quests the player can't take yet (needs a sync)
     int playerLevel = 0;
-    std::string faction;               // "USEC" or "BEAR" from TarkovTracker, empty when unknown               // from TarkovTracker, 0 when unknown
+    std::map<std::string, std::string> gunBuilds;  // weapon id -> encodeBuild() of the last build
+    std::map<std::string, int> traderLevels;       // trader name -> loyalty level; missing means any
+    std::string faction;               // "USEC" or "BEAR" from TarkovTracker, empty when unknown
 
     // Number of consecutive levels built from level 1.
     int builtLevel(const Station &st) const;

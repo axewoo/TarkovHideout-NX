@@ -281,7 +281,8 @@ class Db:
             hb = (it.get("handbookCategories") or [None])[0]
             cat = (self.handbook.get(b.ref_id(hb)) or {}).get("name") if isinstance(self.handbook, dict) else None
             rec = {"n": it.get("name") or iid, "s": it.get("shortName") or "", "c": cat or ""}
-            price = it.get("avg24hPrice") or it.get("lastLowPrice")
+            # The cheapest offer up now: the 24 hour average is dragged up by a few silly listings.
+            price = it.get("lastLowPrice") or it.get("avg24hPrice")
             if price:
                 rec["p"] = int(price)
             sell = best_sell(it, self.traders)
@@ -311,8 +312,160 @@ class Db:
                 continue
             slug = tr.get("normalizedName") or re.sub(r"[^a-z0-9]+", "-", tr["name"].lower())
             traders.append({"n": tr["name"], "img": f"traders/{slug}.jpg", "src": tr.get("imageLink") or ""})
+        guns = self.guns()
         return {"version": 1, "mode": "pvp" if self.mode == "regular" else self.mode, "items": items,
-                "ammo": ammo, "keys": keys, "tasks": tasks, "traders": traders}
+                "ammo": ammo, "keys": keys, "tasks": tasks, "traders": traders, "guns": guns}
+
+    def buy_offers(self, it):
+        """Trader offers as [trader, loyalty level, price in roubles, unlocking quest or ""], cheapest first."""
+        out = []
+        for o in it.get("buyFromTrader") or []:
+            price = o.get("priceRUB") or o.get("price") or 0
+            quest = self.task_names.get(b.ref_id(o.get("taskUnlock")), "") if o.get("taskUnlock") else ""
+            out.append([self.trader_name(o.get("trader")), o.get("minTraderLevel") or 1, int(price), quest or ""])
+        out.sort(key=lambda o: o[2])
+        return out
+
+    def guns(self):
+        """Weapons, the mods that fit them and their stats, for the gun builder.
+
+        Slots list the mods they take as an index into "sets" (many slots share the same list).
+        Each weapon's default build ("d") is a tree of [slot index, mod id, [child slots]].
+        """
+        by_cat = {}
+        for iid, it in self.items.items():
+            for c in it.get("categories") or []:
+                by_cat.setdefault(b.ref_id(c), set()).add(iid)
+        sets, set_index = [], {}
+        mods, weapons = {}, []
+
+        def allowed(slot):
+            f = slot.get("filters") or {}
+            ids = {b.ref_id(i) for i in f.get("allowedItems") or []}
+            for c in f.get("allowedCategories") or []:
+                ids |= by_cat.get(b.ref_id(c), set())
+            for c in f.get("excludedCategories") or []:
+                ids -= by_cat.get(b.ref_id(c), set())
+            ids -= {b.ref_id(i) for i in f.get("excludedItems") or []}
+            return sorted(i for i in ids if i in self.items and "preset" not in (self.items[i].get("types") or []))
+
+        def slots_of(it):
+            out = []
+            for sl in (it.get("properties") or {}).get("slots") or []:
+                ids = allowed(sl)
+                if not ids:
+                    continue
+                key = tuple(ids)
+                if key not in set_index:
+                    set_index[key] = len(sets)
+                    sets.append(list(ids))
+                out.append([sl.get("name") or sl.get("nameId") or "Slot", 1 if sl.get("required") else 0,
+                            set_index[key], sl.get("id") or ""])
+                for i in ids:
+                    queue.append(i)
+            return out
+
+        queue = []
+
+        def add_mod(iid):
+            if iid in mods:
+                return
+            it = self.items[iid]
+            props = it.get("properties") or {}
+            m = {}
+            for key, src in (("e", "ergonomicsModifier"), ("r", "recoilModifier"), ("a", "accuracyModifier"),
+                             ("v", "velocity")):
+                val = it.get(src)
+                if val is None and src == "ergonomicsModifier":
+                    val = props.get("ergonomics")
+                if val:
+                    m[key] = round(val, 2)
+            if props.get("capacity"):
+                m["cap"] = props["capacity"]
+            if props.get("sightingRange"):
+                m["sr"] = props["sightingRange"]
+            if props.get("zoomLevels"):
+                zooms = sorted({z for zl in props["zoomLevels"] for z in (zl or []) if z})
+                if zooms:
+                    m["zm"] = [zooms[0], zooms[-1]]
+            conflicts = [b.ref_id(c) for c in it.get("conflictingItems") or []]
+            if conflicts:
+                m["cf"] = [c for c in conflicts if c]
+            offers = self.buy_offers(it)
+            if offers:
+                m["buy"] = offers
+            mods[iid] = m
+            m["sl"] = slots_of(it)
+            if not m["sl"]:
+                del m["sl"]
+            self.ref(iid)
+
+        presets = {}
+        for iid, it in self.items.items():
+            props = it.get("properties") or {}
+            if props.get("propertiesType") == "ItemPropertiesPreset" and props.get("default"):
+                presets[b.ref_id(props.get("baseItem"))] = it
+
+        def place(slots, parts, depth=0):
+            """Fits the preset's flat part list into the slot tree, first fitting part per slot."""
+            tree = []
+            for si, sl in enumerate(slots):
+                allow = set(sets[sl[2]])
+                for pi, pid in enumerate(parts):
+                    if pid in allow:
+                        parts.pop(pi)
+                        child = place(mods[pid].get("sl", []), parts, depth + 1) if depth < 12 else []
+                        tree.append([si, pid, child])
+                        break
+            return tree
+
+        for iid, it in self.items.items():
+            props = it.get("properties") or {}
+            if props.get("propertiesType") != "ItemPropertiesWeapon":
+                continue
+            w = {"i": iid, "cal": caliber_name(props.get("caliber")), "e": props.get("ergonomics") or 0,
+                 "rv": props.get("recoilVertical") or 0, "rh": props.get("recoilHorizontal") or 0,
+                 "fr": props.get("fireRate") or 0, "sr": props.get("sightingRange") or 0,
+                 "img": f"guns/{iid}.jpg", "src": it.get("image512pxLink") or it.get("inspectImageLink") or ""}
+            offers = self.buy_offers(it)
+            if offers:
+                w["buy"] = offers
+            w["sl"] = slots_of(it)
+            while queue:
+                mid = queue.pop()
+                if mid not in mods:
+                    add_mod(mid)
+            self.ref(iid)
+            pre = presets.get(iid)
+            if pre and (pre.get("image512pxLink") or pre.get("inspectImageLink")):
+                # The assembled default build looks like the weapon; the base item is a bare receiver.
+                w["src"] = pre.get("image512pxLink") or pre.get("inspectImageLink")
+            if pre:
+                parts = [b.ref_id(c.get("item")) for c in pre.get("containsItems") or []]
+                parts = [p for p in parts if p and p != iid and p in mods]
+                w["d"] = place(w["sl"], parts)
+                pp = pre.get("properties") or {}
+                w["pre"] = [pp.get("ergonomics") or 0, pp.get("recoilVertical") or 0, pp.get("recoilHorizontal") or 0]
+            weapons.append(w)
+        weapons.sort(key=lambda w: (self.items[w["i"]].get("name") or ""))
+
+        # Checks the stat formulas the app uses against the game's numbers for each default build.
+        def walk(tree):
+            for _, mid, kids in tree:
+                yield mid
+                yield from walk(kids)
+        off = []
+        for w in weapons:
+            if "pre" not in w:
+                continue
+            ms = [mods[m] for m in walk(w["d"])]
+            erg = w["e"] + sum(m.get("e", 0) for m in ms)
+            rv = w["rv"] * (1 + sum(m.get("r", 0) for m in ms) / 100)
+            if abs(erg - w["pre"][0]) > 1 or abs(rv - w["pre"][1]) > 1.5:
+                off.append((self.items[w["i"]].get("shortName"), round(erg, 1), w["pre"][0], round(rv, 1), w["pre"][1]))
+        print(f"[{self.mode}] guns: {len(weapons)} weapons, {len(mods)} mods, {len(sets)} slot lists; "
+              f"{len(off)} default builds off the game's stats: {off[:12]}")
+        return {"w": weapons, "m": mods, "sets": sets}
 
 
 QUEST_GROUPS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quest_groups.json")
@@ -394,6 +547,35 @@ def apply_quest_groups(tasks):
 
 
 TRADER_ICON_PX = 128
+
+
+GUN_IMG_W = 512
+
+
+def save_gun_pictures(db, out):
+    """Downloads each weapon's picture once as a JPEG on the app's cell colour."""
+    os.makedirs(os.path.join(out, "guns"), exist_ok=True)
+    done = 0
+    for w in db.get("guns", {}).get("w", []):
+        src = w.pop("src", "")
+        path = os.path.join(out, w["img"])
+        if not os.path.exists(path) and src:
+            try:
+                im = Image.open(io.BytesIO(a.fetch_bytes(src))).convert("RGBA")
+                box = im.getchannel("A").point(lambda v: 255 if v > 8 else 0).getbbox()
+                if box:
+                    im = im.crop(box)
+                im.thumbnail((GUN_IMG_W, GUN_IMG_W), Image.LANCZOS)
+                bg = Image.new("RGBA", im.size, a.CELL_RGB + (255,))
+                bg.alpha_composite(im)
+                bg.convert("RGB").save(path, quality=86)
+            except Exception as e:  # noqa: BLE001
+                print(f"  gun picture {w['i']} failed: {e}", file=sys.stderr)
+        if os.path.exists(path):
+            done += 1
+        else:
+            w.pop("img")
+    print(f"gun pictures: {done} of {len(db.get('guns', {}).get('w', []))}")
 
 
 def save_trader_icons(db, out):
