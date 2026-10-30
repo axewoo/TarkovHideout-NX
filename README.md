@@ -3,11 +3,11 @@
 # Tarkov Hideout for Switch, PC and Android
 
 **An offline Escape From Tarkov companion for Nintendo Switch homebrew, Windows, Linux and Android tablets.**
-Hideout planner, craft timers, sharp interactive maps, an ammo chart, a Kappa tracker and a quest database, in 13 color themes, in your hands between raids or on your second screen while you play.
+Hideout planner and craft timers, sharp interactive maps, an ammo chart, a quest screen like the game's, a Kappa tracker and a quest database, in 13 color themes, in your hands between raids or on your second screen while you play.
 
-![Maps, ammo chart, quest guide, Kappa tracker, theme picker and hideout stations](docs/screenshots/hero.jpg)
+![Maps, ammo chart, trader quests, Kappa tracker, theme picker and hideout stations](docs/screenshots/hero.jpg)
 
-[Install](#install) · [PC](#pc-second-screen) · [Android](#android-tablets-and-chromebooks) · [Hideout](#hideout) · [Maps](#maps) · [Ammo](#ammo) · [Database](#database) · [Kappa](#kappa) · [Themes](#themes) · [Profile and sync](#profile-and-tarkovtracker-sync) · [Controls](#controls) · [Building](#building)
+[Install](#install) · [PC](#pc-second-screen) · [Android](#android-tablets-and-chromebooks) · [Hideout](#hideout) · [Maps](#maps) · [Ammo](#ammo) · [Quests](#quests) · [Database](#database) · [Kappa](#kappa) · [Themes](#themes) · [Profile and sync](#profile-and-tarkovtracker-sync) · [Controls](#controls) · [Building](#building)
 
 </div>
 
@@ -16,11 +16,12 @@ Hideout planner, craft timers, sharp interactive maps, an ammo chart, a Kappa tr
 ## Highlights
 
 - **Every hideout station and level**, with the items, tools and skills each one needs, and what you still have to find across the whole hideout.
-- **Craft timers** that keep running while the Switch sleeps.
+- **Crafts and timers** right next to your stations, with timers that keep running while the Switch sleeps.
 - **16 maps built from the game's own renders**, sharp up to 16x zoom, with extracts, transits, boss spawns and every floor of the multi-level maps.
 - **An ammo tab** with an eft-ammo style damage vs penetration chart. Pin rounds to compare them.
 - **A quest screen like the game's**: trader portraits, quests grouped by loyalty level, and a side panel with requirements, objectives and rewards. Hide the quests you can't take yet once you sync.
-- **Quest database** with wiki guides, pictures included, next to objectives, map pins and rewards.
+- **Catch up your quest history in a few presses**: point at the quests you're on, and everything before them is marked done, on TarkovTracker too.
+- **Quest guides** from the wiki, pictures included, next to objectives, map pins and rewards.
 - **Kappa tracker** for every Collector item, saved as you find them, with Kappa quest progress.
 - **13 color themes** with a live-preview picker: OLED, Catppuccin, Nord, Dracula, Gruvbox, Light and more.
 - **TarkovTracker sync that never loses your work**: it merges with the hideout levels you set in the app.
@@ -70,7 +71,7 @@ The PC version is the same app with the same tabs, data and TarkovTracker sync, 
 <td colspan="2"><img src="docs/screenshots/pc-map.jpg" alt="Customs on PC, zoomed in with the wheel"></td>
 </tr>
 <tr>
-<td width="50%"><img src="docs/screenshots/pc-quest.jpg" alt="Quest page on PC"></td>
+<td width="50%"><img src="docs/screenshots/pc-quests.jpg" alt="Quests on PC at 80% interface zoom"></td>
 <td width="50%"><img src="docs/screenshots/pc-ammo.jpg" alt="Ammo chart on PC"></td>
 </tr>
 </table>
@@ -86,7 +87,7 @@ The PC version is the same app with the same tabs, data and TarkovTracker sync, 
   | PgUp / PgDn | Same as ZL / ZR (floors, sections, levels) |
   | X, Y | Same as the Switch buttons |
   | Ctrl+F | Search |
-  | F | Fullscreen map |
+  | F | Same as the Switch's - button: fullscreen map, stations / crafts, show locked quests |
   | R | Game render / vector plan |
   | F11 | Fullscreen window |
   | Ctrl + / Ctrl - / Ctrl 0 | Interface zoom: smaller, larger, reset (Ctrl+wheel too) |
@@ -115,7 +116,7 @@ Progress and downloads stay in the app's private storage and are kept across upd
 <td width="50%"><img src="docs/screenshots/needed.jpg" alt="Needed items"></td>
 </tr>
 <tr>
-<td><b>Stations</b>. Pick a station to see the next level's requirements, mark levels as built and track item counts. Found-in-raid items are tagged.</td>
+<td><b>Stations</b>. Pick a station to see the next level's requirements, mark levels as built and track item counts. Found-in-raid items are tagged. The <b>Stations | Crafts</b> switch at the top (or -) flips to crafts.</td>
 <td><b>Needed</b>. Everything still missing across the hideout, with which stations want it. Y shows only found-in-raid items.</td>
 </tr>
 <tr>
@@ -123,7 +124,7 @@ Progress and downloads stay in the app's private storage and are kept across upd
 <td><img src="docs/screenshots/timers.jpg" alt="Timers"></td>
 </tr>
 <tr>
-<td><b>Crafts</b>. Inside the Stations tab: press - or tap Crafts at the top. Recipes at the stations you've built, filterable by station. A starts a timer.</td>
+<td><b>Crafts</b>. Recipes at the stations you've built, filterable by station. A starts a timer.</td>
 <td><b>Timers</b>. Running and finished crafts. Collect or cancel them here.</td>
 </tr>
 </table>
@@ -161,24 +162,37 @@ Press Minus for a fullscreen map. Quest objectives and key locks open the map wi
 
 Every round with damage, penetration, armor damage and fragmentation, filterable by caliber. The chart plots damage against penetration with armor class columns, like [eft-ammo.com](https://eft-ammo.com). Pin up to eight rounds with A to compare them in color. The panel below shows speed, flea price and a rough read of each armor class.
 
+## Quests
+
+<img src="docs/screenshots/quests.jpg" alt="Quests by trader and loyalty level">
+
+Laid out like the game's trader screen. Pick a trader from the portraits along the top (each shows how many of its quests you've done), or ALL. Quests are grouped under the loyalty level they need, and the panel on the right shows the selected quest's requirements (green when met), initial equipment, objectives and rewards.
+
+- Each quest is marked **done** (green), **available** (ring) or **locked** (padlock: a quest before it isn't done, or your level is too low).
+- **Show completed** (X) brings back finished quests. **Show locked** (-) hides the ones you can't take yet, once you've synced with TarkovTracker. The same switch is in Settings as *Hide quests I can't take yet*.
+- **Search** (Y) looks through every trader and shows done and locked quests too.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/quest.jpg" alt="Quest page"></td>
+<td width="50%"><img src="docs/screenshots/quest-catchup.jpg" alt="Catching up with X"></td>
+</tr>
+<tr>
+<td><b>Quest page</b>. A opens it: the wiki guide with its pictures on the left; requirements, objectives (with Gunsmith build specs), map pins and rewards on the right. Y cycles guide + details, guide only and details only.</td>
+<td><b>Catching up</b>. On a quest you're on, X ("I'm on this one") marks every quest before it in its chain done, and sends them to TarkovTracker when your token can write. See <a href="#profile-and-tarkovtracker-sync">sync</a>.</td>
+</tr>
+</table>
+
 ## Database
 
 <table>
 <tr>
-<td width="50%"><img src="docs/screenshots/quests.jpg" alt="Quest list"></td>
-<td width="50%"><img src="docs/screenshots/quest.jpg" alt="Quest page"></td>
+<td width="50%"><img src="docs/screenshots/keys.jpg" alt="Keys"></td>
+<td width="50%"><img src="docs/screenshots/quest-guide.jpg" alt="Guide only"></td>
 </tr>
 <tr>
-<td><b>Quests</b>. Laid out like the game's trader screen: pick a trader from the portraits, quests are grouped by loyalty level, and the panel on the right shows what the selected quest needs and pays. Quests done on TarkovTracker are hidden unless you tick Show completed (X). After a sync, Show locked (-) hides quests you can't take yet.</td>
-<td><b>Quest page</b>. The wiki guide with its pictures on the left. Requirements, objectives (with Gunsmith build specs), map pins and rewards on the right.</td>
-</tr>
-<tr>
-<td><img src="docs/screenshots/quest-guide.jpg" alt="Guide only"></td>
-<td><img src="docs/screenshots/keys.jpg" alt="Keys"></td>
-</tr>
-<tr>
-<td><b>Guide only</b>. Y cycles guide + details, guide only and details only.</td>
 <td><b>Keys</b>. What each key opens, which quests need it and where its lock is on the map.</td>
+<td><b>Guide only</b>. The wiki guide across the whole screen, pictures included.</td>
 </tr>
 </table>
 
@@ -241,12 +255,12 @@ Switch buttons. On PC, see [PC second screen](#pc-second-screen) for the mouse a
 | Stations | X | Undo the last built level |
 | Stations | Right | Edit item counts for the shown level |
 | Item counts | A / X / Y | +1 / -1 / all or none |
-| Needed items | Left / Right | Page through the list |
-| Needed items | Y | Show only found-in-raid items |
 | Stations | - | Switch between stations and crafts |
 | Crafts | Left / Right | Filter by station |
 | Crafts | A | Start a timer, or collect a finished one |
 | Crafts, Timers | X | Cancel a timer |
+| Needed items | Left / Right | Page through the list |
+| Needed items | Y | Show only found-in-raid items |
 | Map picker | D-pad, A | Choose a map, open it |
 | Maps | Left stick, touch | Pan |
 | Maps | Right stick, A / X | Zoom in / out |
@@ -261,11 +275,12 @@ Switch buttons. On PC, see [PC second screen](#pc-second-screen) for the mouse a
 | Ammo | A | Pin or unpin the round on the chart |
 | Ammo | ZL / ZR | Page through the list |
 | Ammo | Y / X | Search / clear search, then clear the chart |
-| Database | ZL / ZR | Switch section |
-| Database | Left / Right | Pick a trader (page in Keys and Items) |
-| Database | Y / X | Search / clear search |
-| Quests | X | Show or hide completed quests |
+| Database | ZL / ZR | Switch section: quests, keys, items |
+| Quests | Left / Right | Pick a trader |
+| Quests | X | Show or hide completed quests (clears the search first) |
 | Quests | - | Show or hide locked quests (after a sync) |
+| Database | Y / X | Search / clear search |
+| Keys, Items | Left / Right | Page through the list |
 | Database | A | Open quest, show key lock on the map |
 | Quest page | Up / Down, A | Pick an objective or item, show it on the map |
 | Quest page | X | Mark every earlier quest done ("I'm on this one"), then this one, then undo |
