@@ -2260,12 +2260,25 @@ void App::ensureDb() {
     std::string name = "db-" + modeName() + ".json";
     std::string err;
     std::vector<std::string> roots = {dataRoot, std::string(APP_DIR "/"), std::string(ROMFS_ROOT)};
-    for (const auto &root : roots) {
-        if (root.empty())
+    size_t from = roots.size();
+    for (size_t i = 0; i < roots.size(); i++) {
+        if (roots[i].empty())
             continue;
-        std::string text = readFile(root + name);
-        if (!text.empty() && parseDatabase(text, db, err))
+        std::string text = readFile(roots[i] + name);
+        if (!text.empty() && parseDatabase(text, db, err)) {
+            from = i;
             break;
+        }
+    }
+    // Data built before the gun builder has no weapons: take them from an older copy that does.
+    for (size_t i = from + 1; i < roots.size() && db.guns.empty(); i++) {
+        Database other;
+        std::string text = readFile(roots[i] + name);
+        if (!text.empty() && parseDatabase(text, other, err) && !other.guns.empty()) {
+            db.guns = std::move(other.guns);
+            db.mods = std::move(other.mods);
+            db.modSets = std::move(other.modSets);
+        }
     }
     itemsByName.clear();
     for (const auto &[id, it] : db.items)
