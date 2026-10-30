@@ -129,6 +129,9 @@ struct Quest {
     std::string id, name, trader, map, faction, wiki;
     int level = 0, exp = 0;
     int loyalty = 1;  // the giver's loyalty level the quest needs
+    // The game's section: 1-4 loyalty level, 0 Essential tasks, -1 none (Lightkeeper, BTR Driver).
+    int group = 1, groupOrder = 0;
+    std::string chainHead;  // Essential quest this finished one folds under
     bool kappa = false, lightkeeper = false;
     std::vector<std::string> prereqs, traderReqs, keys;
     std::vector<Objective> objectives;
