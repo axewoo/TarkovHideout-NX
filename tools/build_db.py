@@ -436,6 +436,9 @@ class Db:
                     add_mod(mid)
             self.ref(iid)
             pre = presets.get(iid)
+            if pre and (pre.get("image512pxLink") or pre.get("inspectImageLink")):
+                # The assembled default build looks like the weapon; the base item is a bare receiver.
+                w["src"] = pre.get("image512pxLink") or pre.get("inspectImageLink")
             if pre:
                 parts = [b.ref_id(c.get("item")) for c in pre.get("containsItems") or []]
                 parts = [p for p in parts if p and p != iid and p in mods]
@@ -558,6 +561,9 @@ def save_gun_pictures(db, out):
         if not os.path.exists(path) and src:
             try:
                 im = Image.open(io.BytesIO(a.fetch_bytes(src))).convert("RGBA")
+                box = im.getchannel("A").point(lambda v: 255 if v > 8 else 0).getbbox()
+                if box:
+                    im = im.crop(box)
                 im.thumbnail((GUN_IMG_W, GUN_IMG_W), Image.LANCZOS)
                 bg = Image.new("RGBA", im.size, a.CELL_RGB + (255,))
                 bg.alpha_composite(im)

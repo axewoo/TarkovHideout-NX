@@ -32,10 +32,11 @@
 #define PROFILE_API "https://players.tarkov.dev/"
 
 // Crafts live inside Stations (minus switches between the two views).
-enum Tab { TAB_STATIONS, TAB_ITEMS, TAB_TIMERS, TAB_MAPS, TAB_AMMO, TAB_DATABASE, TAB_KAPPA, TAB_PROFILE, TAB_SETTINGS,
-           TAB_COUNT };
-static const char *kTabNames[TAB_COUNT] = {"Stations", "Needed", "Timers", "Maps", "Ammo", "Database", "Kappa",
-                                           "Profile", "Settings"};
+enum Tab { TAB_STATIONS, TAB_ITEMS, TAB_TIMERS, TAB_MAPS, TAB_AMMO, TAB_GUNS, TAB_DATABASE, TAB_KAPPA, TAB_PROFILE,
+           TAB_SETTINGS, TAB_COUNT };
+static const char *kTabNames[TAB_COUNT] = {"Stations", "Needed", "Timers", "Maps", "Ammo", "Guns", "Database",
+                                           "Kappa", "Profile", "Settings"};
+static const int kGunBoxStep = 124;  // gun builder slot box pitch
 
 enum DbSection { DB_QUESTS, DB_KEYS, DB_ITEMS, DB_COUNT };
 static const char *kDbNames[DB_COUNT] = {"Quests", "Keys", "Items"};
@@ -572,6 +573,53 @@ private:
     void drawScrollbar(int x, int y, int h, int count, int visible, int scroll);
     int drawBadge(int x, int y, const std::string &s, SDL_Color c);
     int drawHideoutSwitch(int x, int y);
+
+    // Guns: the gun builder
+    struct GunSlotRow {
+        std::vector<int> path;  // node indices from the build root to the vector holding this slot's mod
+        int slot = 0;
+        int depth = 0;
+        const GunSlot *def = nullptr;
+        std::string mod;     // installed mod id, empty if none
+        std::string parent;  // weapon or mod the slot belongs to
+    };
+    struct GunPrice {
+        int price = 0;
+        std::string where, quest;
+    };
+    struct GunStats {
+        float ergo = 0, recoilV = 0, recoilH = 0, accuracy = 0, velocity = 0, weight = 0;
+        int sightRange = 0, capacity = 0, price = 0;
+    };
+    void inputGuns();
+    void inputGunBuilder();
+    void drawGuns();
+    void drawGunBuilder();
+    void drawGunPicker(const GunSlotRow &row, int rx, int rw);
+    void drawGunPicture(const Gun &g, int x, int y, int w, int h);
+    int drawGunStats(const Gun &g, const GunStats &s, int x, int y, int w);
+    void filterGuns();
+    void openGun(int idx);
+    void saveGunBuild();
+    void flattenGunSlots();
+    std::vector<BuildNode> *gunNodes(const std::vector<int> &path);
+    GunPrice gunPrice(const std::string &id, const std::vector<GunOffer> &offers) const;
+    GunStats gunStats(const Gun &g, const std::vector<BuildNode> &build) const;
+    std::string gunConflict(const std::string &id, const GunSlotRow &row);
+    int gunCols() const;
+    ListView gunList, gunPick;
+    std::vector<int> gunRows;  // indices into db.guns
+    std::vector<std::string> gunCats;
+    int gunCat = 0;  // 0 = all, else gunCats index + 1
+    std::string gunSearch;
+    bool gunDirty = true;
+    int gunOpen = -1;  // db.guns index of the weapon being built, -1 for the list
+    std::vector<BuildNode> gunBuild;
+    std::vector<GunSlotRow> gunSlots;
+    int gunSlotSel = 0, gunSlotScroll = 0;
+    bool gunPicking = false;
+    std::vector<std::string> gunPickRows;  // mod ids, "" = leave empty
+    std::map<std::string, SDL_Texture *> gunPics;
 
     // Kappa: the Collector quest's items
     void ensureKappa();
@@ -1256,6 +1304,7 @@ void App::input() {
     case TAB_TIMERS: inputTimers(); break;
     case TAB_MAPS: inputMaps(); break;
     case TAB_AMMO: inputAmmo(); break;
+    case TAB_GUNS: inputGuns(); break;
     case TAB_DATABASE: inputDatabase(); break;
     case TAB_KAPPA: inputKappa(); break;
     case TAB_PROFILE: inputProfile(); break;
@@ -1893,6 +1942,15 @@ bool App::wheelList() {
     case TAB_ITEMS: lv = &itemList; n = needed.size(); break;
     case TAB_TIMERS: lv = &timerList; n = st.timers.size(); break;
     case TAB_AMMO: lv = &ammoList; n = ammoRows.size(); break;
+    case TAB_GUNS:
+        if (gunOpen < 0) {
+            lv = &gunList;
+            n = gunRows.size();
+        } else if (gunPicking) {
+            lv = &gunPick;
+            n = gunPickRows.size();
+        }
+        break;
     case TAB_SETTINGS: lv = &settingsList; n = settingRows().size(); confirmReset = false; break;
     case TAB_DATABASE:
         if (openQuest < 0) {
@@ -2215,6 +2273,9 @@ void App::ensureDb() {
     std::sort(itemsByName.begin(), itemsByName.end(),
               [this](const std::string &a, const std::string &b) { return db.items.at(a).name < db.items.at(b).name; });
     dbDirty = true;
+    gunDirty = true;
+    gunOpen = -1;
+    gunSlots.clear();
 }
 
 void App::ensureWiki() {
@@ -4073,6 +4134,671 @@ void App::drawItemDetail(const std::string &id, int x, int y, int w) {
     }
 }
 
+// ---------------------------------------------------------------- guns (gun builder)
+
+// Every slot of the current build in display order: the weapon's slots, each followed by the
+// slots of the mod installed in it.
+void App::flattenGunSlots() {
+    gunSlots.clear();
+    if (gunOpen < 0 || gunOpen >= (int)db.guns.size())
+        return;
+    std::function<void(const std::vector<GunSlot> &, std::vector<int>, int, const std::string &)> walk =
+        [&](const std::vector<GunSlot> &slots, std::vector<int> path, int depth, const std::string &parent) {
+            std::vector<BuildNode> *nodes = gunNodes(path);
+            for (int i = 0; i < (int)slots.size(); i++) {
+                GunSlotRow row{path, i, depth, &slots[i], "", parent};
+                int ni = -1;
+                for (int k = 0; nodes && k < (int)nodes->size(); k++)
+                    if ((*nodes)[k].slot == i)
+                        ni = k;
+                if (ni >= 0)
+                    row.mod = (*nodes)[ni].mod;
+                gunSlots.push_back(row);
+                auto m = db.mods.find(row.mod);
+                if (ni >= 0 && m != db.mods.end() && !m->second.slots.empty() && depth < 12) {
+                    std::vector<int> sub = path;
+                    sub.push_back(ni);
+                    walk(m->second.slots, sub, depth + 1, row.mod);
+                }
+            }
+        };
+    walk(db.guns[gunOpen].slots, {}, 0, db.guns[gunOpen].id);
+}
+
+std::vector<BuildNode> *App::gunNodes(const std::vector<int> &path) {
+    std::vector<BuildNode> *v = &gunBuild;
+    for (int i : path) {
+        if (i < 0 || i >= (int)v->size())
+            return nullptr;
+        v = &(*v)[i].kids;
+    }
+    return v;
+}
+
+// Drops mods that no longer fit (data changed since the build was saved).
+static void pruneBuild(const Database &db, const std::vector<GunSlot> &slots, std::vector<BuildNode> &nodes, int depth) {
+    std::vector<BuildNode> kept;
+    std::set<int> used;
+    for (auto &n : nodes) {
+        if (n.slot < 0 || n.slot >= (int)slots.size() || used.count(n.slot))
+            continue;
+        int set = slots[n.slot].set;
+        auto m = db.mods.find(n.mod);
+        if (m == db.mods.end() || set < 0 || set >= (int)db.modSets.size())
+            continue;
+        const auto &ids = db.modSets[set];
+        if (std::find(ids.begin(), ids.end(), n.mod) == ids.end())
+            continue;
+        if (depth < 12)
+            pruneBuild(db, m->second.slots, n.kids, depth + 1);
+        else
+            n.kids.clear();
+        used.insert(n.slot);
+        kept.push_back(std::move(n));
+    }
+    nodes = std::move(kept);
+}
+
+void App::openGun(int idx) {
+    gunOpen = idx;
+    const Gun &g = db.guns[idx];
+    auto saved = st.gunBuilds.find(g.id);
+    gunBuild = saved != st.gunBuilds.end() ? decodeBuild(saved->second) : g.def;
+    pruneBuild(db, g.slots, gunBuild, 0);
+    gunSlotSel = gunSlotScroll = 0;
+    gunPicking = false;
+    flattenGunSlots();
+}
+
+void App::saveGunBuild() {
+    if (gunOpen < 0)
+        return;
+    const Gun &g = db.guns[gunOpen];
+    std::string enc = encodeBuild(gunBuild);
+    if (enc == encodeBuild(g.def))
+        st.gunBuilds.erase(g.id);
+    else
+        st.gunBuilds[g.id] = enc;
+    saveState(STATE_PATH, st);
+    flattenGunSlots();
+}
+
+static void collectMods(const std::vector<BuildNode> &nodes, std::vector<std::string> &out) {
+    for (const auto &n : nodes) {
+        out.push_back(n.mod);
+        collectMods(n.kids, out);
+    }
+}
+
+// Cheapest way to buy an item: a trader offer or the flea market. Price 0 when neither.
+App::GunPrice App::gunPrice(const std::string &id, const std::vector<GunOffer> &offers) const {
+    GunPrice best;
+    for (const auto &o : offers)
+        if (o.price > 0 && (best.price == 0 || o.price < best.price))
+            best = {o.price, o.trader + " LL" + std::to_string(o.level), o.quest};
+    const DbItem *it = db.item(id);
+    if (it && it->price > 0 && !it->noFlea && (best.price == 0 || it->price < best.price))
+        best = {it->price, "Flea", ""};
+    return best;
+}
+
+App::GunStats App::gunStats(const Gun &g, const std::vector<BuildNode> &build) const {
+    GunStats s;
+    std::vector<std::string> ids;
+    collectMods(build, ids);
+    float erg = g.ergo, rec = 0;
+    const DbItem *gi = db.item(g.id);
+    s.weight = gi ? gi->weight : 0;
+    s.sightRange = g.sightRange;
+    GunPrice gp = gunPrice(g.id, g.buy);
+    s.price = gp.price;
+    for (const auto &id : ids) {
+        auto m = db.mods.find(id);
+        if (m == db.mods.end())
+            continue;
+        erg += m->second.ergo;
+        rec += m->second.recoil;
+        s.accuracy += m->second.accuracy;
+        s.velocity += m->second.velocity;
+        s.sightRange = std::max(s.sightRange, m->second.sightRange);
+        if (m->second.capacity)
+            s.capacity = m->second.capacity;
+        if (const DbItem *it = db.item(id))
+            s.weight += it->weight;
+        s.price += gunPrice(id, m->second.buy).price;
+    }
+    s.ergo = std::clamp(erg, 0.f, 100.f);
+    s.recoilV = g.recoilV * (1 + rec / 100);
+    s.recoilH = g.recoilH * (1 + rec / 100);
+    return s;
+}
+
+// Mods already installed that keep `id` out, apart from the subtree it would replace.
+std::string App::gunConflict(const std::string &id, const GunSlotRow &row) {
+    std::vector<std::string> installed;
+    std::vector<BuildNode> *nodes = gunNodes(row.path);
+    std::vector<std::string> replaced;
+    if (nodes)
+        for (const auto &n : *nodes)
+            if (n.slot == row.slot) {
+                replaced.push_back(n.mod);
+                collectMods(n.kids, replaced);
+            }
+    collectMods(gunBuild, installed);
+    auto cand = db.mods.find(id);
+    for (const auto &other : installed) {
+        if (std::find(replaced.begin(), replaced.end(), other) != replaced.end())
+            continue;
+        auto m = db.mods.find(other);
+        bool clash = cand != db.mods.end() &&
+                     std::find(cand->second.conflicts.begin(), cand->second.conflicts.end(), other) !=
+                         cand->second.conflicts.end();
+        if (!clash && m != db.mods.end())
+            clash = std::find(m->second.conflicts.begin(), m->second.conflicts.end(), id) != m->second.conflicts.end();
+        if (clash)
+            return other;
+    }
+    return "";
+}
+
+void App::filterGuns() {
+    gunDirty = false;
+    gunCats.clear();
+    std::set<std::string> cats;
+    for (const auto &g : db.guns) {
+        const DbItem *it = db.item(g.id);
+        if (it && !it->category.empty())
+            cats.insert(it->category);
+    }
+    gunCats.assign(cats.begin(), cats.end());
+    if (gunCat > (int)gunCats.size())
+        gunCat = 0;
+    std::string q = lower(gunSearch);
+    gunRows.clear();
+    for (int i = 0; i < (int)db.guns.size(); i++) {
+        const Gun &g = db.guns[i];
+        const DbItem *it = db.item(g.id);
+        std::string cat = it ? it->category : "";
+        if (gunCat && cat != gunCats[gunCat - 1])
+            continue;
+        if (!q.empty() && lower(itemName(g.id) + " " + g.caliber).find(q) == std::string::npos)
+            continue;
+        gunRows.push_back(i);
+    }
+    std::stable_sort(gunRows.begin(), gunRows.end(), [this](int a, int b) {
+        const DbItem *x = db.item(db.guns[a].id), *y = db.item(db.guns[b].id);
+        std::string cx = x ? x->category : "", cy = y ? y->category : "";
+        return cx != cy ? cx < cy : itemName(db.guns[a].id) < itemName(db.guns[b].id);
+    });
+}
+
+void App::inputGuns() {
+    ensureDb();
+    if (gunOpen >= 0) {
+        inputGunBuilder();
+        return;
+    }
+    if (in.pressed(HidNpadButton_Y)) {
+        std::string q;
+        if (keyboard("Search weapons", "Part of a name or caliber", gunSearch, false, q)) {
+            gunSearch = q;
+            gunList = ListView();
+            gunDirty = true;
+        }
+    }
+    if (in.pressed(HidNpadButton_X) && !gunSearch.empty()) {
+        gunSearch.clear();
+        gunList = ListView();
+        gunDirty = true;
+    }
+    if (gunDirty)
+        filterGuns();
+    int nc = gunCats.size();
+    if (nc > 0 && (in.left() || in.right())) {
+        gunCat = (gunCat + (in.right() ? 1 : -1) + nc + 1) % (nc + 1);
+        gunList = ListView();
+        gunDirty = true;
+        filterGuns();
+    }
+    int n = gunRows.size();
+    if (in.up())
+        gunList.move(-1, n);
+    if (in.downDir())
+        gunList.move(1, n);
+    if (in.pressed(HidNpadButton_ZL))
+        gunList.move(-10, n);
+    if (in.pressed(HidNpadButton_ZR))
+        gunList.move(10, n);
+    gunList.clampSel(n);
+    if (n > 0 && in.pressed(HidNpadButton_A))
+        openGun(gunRows[gunList.sel]);
+}
+
+int App::gunCols() const {
+    return std::max(1, (kW - 480 - 16) / kGunBoxStep);
+}
+
+void App::inputGunBuilder() {
+    const Gun &g = db.guns[gunOpen];
+    int n = gunSlots.size();
+    if (gunPicking) {
+        int np = gunPickRows.size();
+        if (in.pressed(HidNpadButton_B)) {
+            gunPicking = false;
+            return;
+        }
+        if (in.up())
+            gunPick.move(-1, np);
+        if (in.downDir())
+            gunPick.move(1, np);
+        if (in.pressed(HidNpadButton_ZL))
+            gunPick.move(-8, np);
+        if (in.pressed(HidNpadButton_ZR))
+            gunPick.move(8, np);
+        gunPick.clampSel(np);
+        if (np > 0 && in.pressed(HidNpadButton_A) && gunSlotSel < n) {
+            GunSlotRow row = gunSlots[gunSlotSel];
+            std::string id = gunPickRows[gunPick.sel];
+            std::vector<BuildNode> *nodes = gunNodes(row.path);
+            if (!nodes)
+                return;
+            if (!id.empty()) {
+                std::string clash = gunConflict(id, row);
+                if (!clash.empty()) {
+                    setStatus("Can't fit: it conflicts with " + itemName(clash), col::warn);
+                    return;
+                }
+            }
+            nodes->erase(std::remove_if(nodes->begin(), nodes->end(),
+                                        [&](const BuildNode &b) { return b.slot == row.slot; }),
+                         nodes->end());
+            if (!id.empty())
+                nodes->push_back({row.slot, id, {}});
+            std::sort(nodes->begin(), nodes->end(), [](const BuildNode &a, const BuildNode &b) { return a.slot < b.slot; });
+            gunPicking = false;
+            saveGunBuild();
+            setStatus(id.empty() ? row.def->name + " emptied" : itemName(id) + " installed", col::good);
+        }
+        return;
+    }
+    if (in.pressed(HidNpadButton_B)) {
+        gunOpen = -1;
+        return;
+    }
+    int cols = gunCols();
+    if (n > 0) {
+        if (in.left())
+            gunSlotSel = std::max(0, gunSlotSel - 1);
+        if (in.right())
+            gunSlotSel = std::min(n - 1, gunSlotSel + 1);
+        if (in.up())
+            gunSlotSel = std::max(0, gunSlotSel - cols);
+        if (in.downDir())
+            gunSlotSel = std::min(n - 1, gunSlotSel + cols);
+    }
+    gunSlotSel = std::clamp(gunSlotSel, 0, std::max(0, n - 1));
+    if (in.pressed(HidNpadButton_Y)) {
+        gunBuild = g.def;
+        gunSlotSel = 0;
+        saveGunBuild();
+        setStatus("Back to the default build");
+        return;
+    }
+    if (in.pressed(HidNpadButton_Minus)) {
+        gunBuild.clear();
+        gunSlotSel = 0;
+        saveGunBuild();
+        setStatus("All mods removed");
+        return;
+    }
+    if (n == 0)
+        return;
+    const GunSlotRow &row = gunSlots[gunSlotSel];
+    if (in.pressed(HidNpadButton_X) && !row.mod.empty()) {
+        std::vector<BuildNode> *nodes = gunNodes(row.path);
+        if (nodes) {
+            std::string name = itemName(row.mod);
+            nodes->erase(std::remove_if(nodes->begin(), nodes->end(),
+                                        [&](const BuildNode &b) { return b.slot == row.slot; }),
+                         nodes->end());
+            saveGunBuild();
+            gunSlotSel = std::min(gunSlotSel, std::max(0, (int)gunSlots.size() - 1));
+            setStatus(name + " removed");
+        }
+        return;
+    }
+    if (in.pressed(HidNpadButton_A)) {
+        gunPickRows.clear();
+        gunPickRows.push_back("");
+        if (row.def->set >= 0 && row.def->set < (int)db.modSets.size())
+            for (const auto &id : db.modSets[row.def->set])
+                if (db.mods.count(id))
+                    gunPickRows.push_back(id);
+        std::sort(gunPickRows.begin() + 1, gunPickRows.end(),
+                  [this](const std::string &a, const std::string &b) { return itemName(a) < itemName(b); });
+        gunPick = ListView();
+        auto cur = std::find(gunPickRows.begin(), gunPickRows.end(), row.mod);
+        gunPick.sel = cur == gunPickRows.end() ? 0 : cur - gunPickRows.begin();
+        gunPicking = true;
+    }
+}
+
+// "Erg +2  Recoil -5%" for a mod row.
+static std::string modEffects(const GunMod &m) {
+    char buf[160];
+    std::string s;
+    auto add = [&](const char *label, float v, const char *unit) {
+        if (std::fabs(v) < 0.05f)
+            return;
+        snprintf(buf, sizeof buf, "%s%s %s%g%s", s.empty() ? "" : "  ", label, v > 0 ? "+" : "", std::round(v * 10) / 10,
+                 unit);
+        s += buf;
+    };
+    add("Erg", m.ergo, "");
+    add("Recoil", m.recoil, "%");
+    add("Acc", m.accuracy, "%");
+    add("Vel", m.velocity, "%");
+    if (m.capacity)
+        s += std::string(s.empty() ? "" : "  ") + std::to_string(m.capacity) + " rds";
+    if (m.zoomMax > 0) {
+        snprintf(buf, sizeof buf, "%s%gx", s.empty() ? "" : "  ", m.zoomMax);
+        s += buf;
+    }
+    return s;
+}
+
+void App::drawGunPicture(const Gun &g, int x, int y, int w, int h) {
+    ui.fill(x, y, w, h, col::cell);
+    bool missing = true;
+    SDL_Texture *t = g.img.empty() ? nullptr : picture(gunPics, g.img, missing);
+    if (t) {
+        int tw = 0, th = 0;
+        SDL_QueryTexture(t, nullptr, nullptr, &tw, &th);
+        float sc = std::min(float(w - 16) / std::max(tw, 1), float(h - 16) / std::max(th, 1));
+        sc = std::min(sc, 2.f);
+        SDL_FRect dst{x + (w - tw * sc) / 2, y + (h - th * sc) / 2, tw * sc, th * sc};
+        ui.image(t, nullptr, &dst);
+    } else {
+        int ic = itemIcon(g.id);
+        if (ic >= 0)
+            ui.icon(ic, x + w / 2 - 48, y + h / 2 - 48, 96);
+        ui.text(x + 12, y + h - 28, missing ? "Picture unavailable offline" : "Loading picture...", FS_SMALL, col::faint);
+    }
+}
+
+// Stat rows with the change from the default build.
+int App::drawGunStats(const Gun &g, const GunStats &s, int x, int y, int w) {
+    GunStats d = gunStats(g, g.def);
+    char buf[64];
+    auto row = [&](const char *label, const std::string &val, float delta, bool lowerBetter, float frac,
+                   const char *unit) {
+        ui.text(x, y, label, FS_SMALL, col::dim);
+        ui.textRight(x + w - 90, y, val, FS_SMALL, col::text);
+        if (std::fabs(delta) >= 0.05f) {
+            bool good = lowerBetter ? delta < 0 : delta > 0;
+            snprintf(buf, sizeof buf, "%s%g%s", delta > 0 ? "+" : "", std::round(delta * 10) / 10, unit);
+            ui.textRight(x + w, y, buf, FS_SMALL, good ? col::good : col::bad);
+        }
+        if (frac >= 0) {
+            ui.fill(x, y + 27, w - 90, 4, col::cell);
+            ui.fill(x, y + 27, int((w - 90) * std::clamp(frac, 0.f, 1.f)), 4, col::accent);
+        }
+        y += 38;
+    };
+    row("Ergonomics", std::to_string((int)std::round(s.ergo)), s.ergo - d.ergo, false, s.ergo / 100, "");
+    float rmax = std::max(1.f, (float)g.recoilV);
+    row("Vertical recoil", std::to_string((int)std::round(s.recoilV)), s.recoilV - d.recoilV, true, s.recoilV / rmax, "");
+    rmax = std::max(1.f, (float)g.recoilH);
+    row("Horizontal recoil", std::to_string((int)std::round(s.recoilH)), s.recoilH - d.recoilH, true, s.recoilH / rmax,
+        "");
+    snprintf(buf, sizeof buf, "%+g%%", std::round(s.accuracy * 10) / 10);
+    row("Accuracy", buf, s.accuracy - d.accuracy, false, -1, "%");
+    snprintf(buf, sizeof buf, "%+g%%", std::round(s.velocity * 10) / 10);
+    row("Muzzle velocity", buf, s.velocity - d.velocity, false, -1, "%");
+    snprintf(buf, sizeof buf, "%.2f kg", s.weight);
+    row("Weight", buf, s.weight - d.weight, true, -1, " kg");
+    row("Sighting range", std::to_string(s.sightRange) + " m", s.sightRange - d.sightRange, false, -1, " m");
+    row("Magazine", s.capacity ? std::to_string(s.capacity) + " rounds" : "none", s.capacity - d.capacity, false, -1,
+        "");
+    row("Fire rate", std::to_string(g.fireRate) + " rpm", 0, false, -1, "");
+    return y;
+}
+
+void App::drawGuns() {
+    ensureDb();
+    if (gunOpen >= 0 && gunOpen < (int)db.guns.size()) {
+        drawGunBuilder();
+        return;
+    }
+    if (gunDirty)
+        filterGuns();
+    if (db.guns.empty()) {
+        drawEmpty("No weapon data yet.", "Connect to the internet and use Settings > Download latest hideout data.");
+        drawFooter({{"+", "Quit"}});
+        return;
+    }
+    std::string cat = gunCat == 0 ? "All weapons" : gunCats[gunCat - 1];
+    int fw = ui.text(24, kTop - 6, "<  " + cat + "  >", FS_BODY, col::accent, 420);
+    filterTaps(16, kTop - 10, fw + 16, 36);
+    if (!gunSearch.empty()) {
+        int bw = drawBadge(460, kTop - 4, "Search: " + gunSearch, col::info);
+        onTap(460, kTop - 8, bw, 32, [this](int) { press(HidNpadButton_X); });
+    }
+    const int lx = 16, lw = 560, rowH = 44, top = kTop + 34;
+    int visible = (kBottom - top) / rowH;
+    gunList.clamp(gunRows.size(), visible);
+    std::string lastCat;
+    for (int i = 0; i < visible && gunList.scroll + i < (int)gunRows.size(); i++) {
+        int idx = gunList.scroll + i;
+        const Gun &g = db.guns[gunRows[idx]];
+        int y = top + i * rowH;
+        bool on = idx == gunList.sel;
+        onTap(lx, y, lw, rowH - 4, [this, idx](int n) { listTap(gunList, idx, n); });
+        ui.fill(lx, y, lw, rowH - 4, on ? col::panelHi : col::panel);
+        if (on)
+            ui.fill(lx, y, 4, rowH - 4, col::accent);
+        ui.icon(itemIcon(g.id), lx + 10, y + 2, 36);
+        int w = ui.text(lx + 56, y + 8, itemName(g.id), FS_SMALL, on ? col::text : col::dim, lw - 200);
+        (void)w;
+        ui.textRight(lx + lw - 12, y + 8, g.caliber, FS_SMALL, col::faint);
+        if (st.gunBuilds.count(g.id))
+            ui.disc(lx + lw - 140, y + 20, 4, col::info);
+    }
+    drawScrollbar(lx + lw + 2, top, visible * rowH, gunRows.size(), visible, gunList.scroll);
+
+    if (!gunRows.empty()) {
+        const Gun &g = db.guns[gunRows[gunList.sel]];
+        int rx = lx + lw + 24, rw = kW - rx - 16;
+        ui.fill(rx, kTop - 10, rw, kBottom - kTop + 10, col::panel);
+        ui.text(rx + 16, kTop, itemName(g.id), FS_BODY, col::text, rw - 32);
+        const DbItem *it = db.item(g.id);
+        ui.text(rx + 16, kTop + 34, (it ? it->category + "  -  " : std::string()) + g.caliber, FS_SMALL, col::dim,
+                rw - 32);
+        drawGunPicture(g, rx + 16, kTop + 66, rw - 32, 200);
+        int y = kTop + 280;
+        std::vector<BuildNode> shown = g.def;
+        auto saved = st.gunBuilds.find(g.id);
+        if (saved != st.gunBuilds.end()) {
+            shown = decodeBuild(saved->second);
+            pruneBuild(db, g.slots, shown, 0);
+        }
+        ui.text(rx + 16, y, saved != st.gunBuilds.end() ? "YOUR BUILD" : "DEFAULT BUILD", FS_SMALL, col::accent);
+        y += 30;
+        GunStats s = gunStats(g, shown);
+        char buf[96];
+        snprintf(buf, sizeof buf, "Ergonomics %d    Recoil %d / %d", (int)std::round(s.ergo), (int)std::round(s.recoilV),
+                 (int)std::round(s.recoilH));
+        ui.text(rx + 16, y, buf, FS_SMALL, col::text, rw - 32);
+        y += 30;
+        snprintf(buf, sizeof buf, "%.2f kg    %d rpm    %d slots", s.weight, g.fireRate, (int)g.slots.size());
+        ui.text(rx + 16, y, buf, FS_SMALL, col::dim, rw - 32);
+        y += 30;
+        GunPrice p = gunPrice(g.id, g.buy);
+        if (p.price)
+            ui.text(rx + 16, y, "Weapon: " + groupDigits(p.price) + " RUB  (" + p.where + ")", FS_SMALL, col::dim,
+                    rw - 32);
+        y += 30;
+        if (s.price)
+            ui.text(rx + 16, y, "Build total: about " + groupDigits(s.price) + " RUB", FS_SMALL, col::accent, rw - 32);
+    }
+    std::vector<std::pair<std::string, std::string>> hints = {{"A", "Build"}, {"Y", "Search"}, {"</>", "Type"}};
+    if (!gunSearch.empty())
+        hints.push_back({"X", "Clear search"});
+    hints.push_back({"+", "Quit"});
+    drawFooter(hints);
+}
+
+void App::drawGunBuilder() {
+    const Gun &g = db.guns[gunOpen];
+    const int lw = kW - 480, rx = kW - 456, rw = 440;
+    int nw = ui.text(24, kTop - 10, itemName(g.id), FS_BODY, col::text, lw - 200);
+    drawBadge(24 + nw + 14, kTop - 6, g.caliber, col::info);
+    onTap(0, kTop - 14, 24 + nw, 36, [this](int) { press(HidNpadButton_B); });
+    drawGunPicture(g, 16, kTop + 26, lw, 166);
+
+    // Slot boxes, like the game's modding screen.
+    const int bw = kGunBoxStep - 6, bh = 94, rowStep = 100, gy = kTop + 202;
+    int cols = gunCols();
+    int rowsVisible = std::max(1, (kBottom - gy) / rowStep);
+    int n = gunSlots.size();
+    int selRow = gunSlotSel / cols;
+    if (selRow < gunSlotScroll)
+        gunSlotScroll = selRow;
+    if (selRow >= gunSlotScroll + rowsVisible)
+        gunSlotScroll = selRow - rowsVisible + 1;
+    int totalRows = (n + cols - 1) / cols;
+    gunSlotScroll = std::clamp(gunSlotScroll, 0, std::max(0, totalRows - rowsVisible));
+    std::vector<std::string> missing;
+    for (const auto &r : gunSlots)
+        if (r.def->required && r.mod.empty())
+            missing.push_back(r.def->name);
+    for (int i = gunSlotScroll * cols; i < n && i < (gunSlotScroll + rowsVisible) * cols; i++) {
+        const GunSlotRow &r = gunSlots[i];
+        int c = i % cols, rr = i / cols - gunSlotScroll;
+        int x = 16 + c * kGunBoxStep, y = gy + rr * rowStep;
+        bool on = i == gunSlotSel && !gunPicking;
+        onTap(x, y, bw, bh, [this, i](int taps) {
+            gunPicking = false;
+            gunSlotSel = i;
+            if (taps >= 2)
+                press(HidNpadButton_A);
+        });
+        bool need = r.def->required && r.mod.empty();
+        ui.fill(x, y, bw, bh, on ? col::panelHi : col::panel);
+        // Nested slots get a stripe per level, so the parent mod is easy to follow.
+        for (int d = 0; d < std::min(r.depth, 4); d++)
+            ui.fill(x + 4 + d * 6, y + 4, 4, 4, col::info);
+        ui.rect(x, y, bw, bh, need ? col::bad : (i == gunSlotSel ? col::accent : col::line));
+        if (i == gunSlotSel && gunPicking)
+            ui.rect(x + 1, y + 1, bw - 2, bh - 2, col::accent);
+        ui.text(x + 6, y + 6, r.def->name, FS_SMALL, need ? col::bad : col::faint, bw - 12);
+        if (!r.mod.empty()) {
+            ui.icon(itemIcon(r.mod), x + (bw - 44) / 2, y + 30, 44);
+            const DbItem *it = db.item(r.mod);
+            ui.text(x + 6, y + bh - 26, it ? it->shortName : r.mod, FS_SMALL, on ? col::text : col::dim, bw - 12);
+        } else {
+            ui.text(x + (bw - ui.measure("+", FS_TITLE)) / 2, y + 30, "+", FS_TITLE, col::faint);
+        }
+    }
+    if (totalRows > rowsVisible)
+        drawScrollbar(16 + cols * kGunBoxStep, gy, rowsVisible * rowStep, totalRows, rowsVisible, gunSlotScroll);
+
+    ui.fill(rx, kTop - 10, rw, kBottom - kTop + 10, col::panel);
+    if (gunPicking && gunSlotSel < n) {
+        drawGunPicker(gunSlots[gunSlotSel], rx, rw);
+        drawFooter({{"A", "Install"}, {"B", "Cancel"}, {"ZL/ZR", "Page"}});
+        return;
+    }
+    GunStats s = gunStats(g, gunBuild);
+    ui.text(rx + 16, kTop, "STATS", FS_SMALL, col::accent);
+    ui.textRight(rx + rw - 16, kTop, "vs default", FS_SMALL, col::faint);
+    int y = drawGunStats(g, s, rx + 16, kTop + 34, rw - 32);
+    ui.fill(rx + 16, y, rw - 32, 1, col::line);
+    y += 10;
+    if (!missing.empty()) {
+        std::string m;
+        for (const auto &x : missing)
+            m += (m.empty() ? "" : ", ") + x;
+        ui.text(rx + 16, y, "Won't fire without: " + m, FS_SMALL, col::bad, rw - 32);
+        y += 30;
+    }
+    if (n > 0) {
+        const GunSlotRow &r = gunSlots[gunSlotSel];
+        ui.text(rx + 16, y, r.def->name + (r.def->required ? "  (required)" : ""), FS_SMALL, col::accent, rw - 32);
+        y += 28;
+        if (!r.mod.empty()) {
+            auto m = db.mods.find(r.mod);
+            ui.text(rx + 16, y, itemName(r.mod), FS_SMALL, col::text, rw - 32);
+            y += 28;
+            if (m != db.mods.end()) {
+                std::string fx = modEffects(m->second);
+                if (!fx.empty()) {
+                    ui.text(rx + 16, y, fx, FS_SMALL, col::dim, rw - 32);
+                    y += 28;
+                }
+                GunPrice p = gunPrice(r.mod, m->second.buy);
+                if (p.price) {
+                    ui.text(rx + 16, y, groupDigits(p.price) + " RUB  " + p.where, FS_SMALL, col::dim, rw - 32);
+                    y += 28;
+                }
+                if (!p.quest.empty())
+                    ui.text(rx + 16, y, "Unlocked by " + p.quest, FS_SMALL, col::faint, rw - 32);
+            }
+        } else {
+            ui.text(rx + 16, y, "Empty", FS_SMALL, col::faint);
+        }
+    }
+    if (s.price)
+        ui.text(rx + 16, kBottom - 30, "Build total: about " + groupDigits(s.price) + " RUB", FS_SMALL, col::accent,
+                rw - 32);
+    std::vector<std::pair<std::string, std::string>> hints = {{"A", "Change"}};
+    if (n > 0 && !gunSlots[gunSlotSel].mod.empty())
+        hints.push_back({"X", "Remove"});
+    hints.push_back({"Y", "Default"});
+    hints.push_back({"-", "Strip"});
+    hints.push_back({"B", "Back"});
+    drawFooter(hints);
+}
+
+void App::drawGunPicker(const GunSlotRow &row, int rx, int rw) {
+    ui.text(rx + 16, kTop, "Pick a " + row.def->name, FS_SMALL, col::accent, rw - 32);
+    ui.textRight(rx + rw - 16, kTop, std::to_string((int)gunPickRows.size() - 1) + " fit", FS_SMALL, col::faint);
+    const int top = kTop + 32, rowH = 52;
+    int visible = (kBottom - top) / rowH;
+    gunPick.clamp(gunPickRows.size(), visible);
+    for (int i = 0; i < visible && gunPick.scroll + i < (int)gunPickRows.size(); i++) {
+        int idx = gunPick.scroll + i;
+        const std::string &id = gunPickRows[idx];
+        int y = top + i * rowH;
+        bool on = idx == gunPick.sel;
+        onTap(rx + 8, y, rw - 16, rowH - 4, [this, idx](int taps) { listTap(gunPick, idx, taps); });
+        if (on)
+            ui.fill(rx + 8, y, rw - 16, rowH - 4, col::panelHi);
+        if (id.empty()) {
+            ui.text(rx + 64, y + 12, row.def->required ? "Empty (won't fire)" : "Empty", FS_SMALL,
+                    on ? col::text : col::dim);
+            continue;
+        }
+        bool installed = id == row.mod;
+        bool clash = !installed && !gunConflict(id, row).empty();
+        ui.icon(itemIcon(id), rx + 14, y + 4, 40);
+        const DbItem *it = db.item(id);
+        ui.text(rx + 64, y + 2, it ? it->shortName : id, FS_SMALL, clash ? col::faint : (on ? col::text : col::dim),
+                rw - 200);
+        auto m = db.mods.find(id);
+        std::string fx = clash ? "Conflicts with your build" : (m != db.mods.end() ? modEffects(m->second) : "");
+        ui.text(rx + 64, y + 24, fx, FS_SMALL, clash ? col::bad : col::faint, rw - 90);
+        if (m != db.mods.end()) {
+            GunPrice p = gunPrice(id, m->second.buy);
+            if (p.price)
+                ui.textRight(rx + rw - 20, y + 2, groupDigits(p.price), FS_SMALL, col::dim);
+        }
+        if (installed)
+            ui.disc(rx + 10, y + 24, 4, col::accent);
+    }
+    drawScrollbar(rx + rw - 8, top, visible * rowH, gunPickRows.size(), visible, gunPick.scroll);
+}
+
 void App::drawKeys() {
     const int rowH = 48, top = kTop + 40;
     int visible = (kBottom - top) / rowH;
@@ -4574,6 +5300,7 @@ void App::draw() {
     case TAB_TIMERS: drawTimers(); break;
     case TAB_MAPS: drawMaps(); break;
     case TAB_AMMO: drawAmmo(); break;
+    case TAB_GUNS: drawGuns(); break;
     case TAB_DATABASE: drawDatabase(); break;
     case TAB_KAPPA: drawKappa(); break;
     case TAB_PROFILE: drawProfile(); break;

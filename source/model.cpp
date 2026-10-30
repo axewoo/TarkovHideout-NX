@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <functional>
 #include <sstream>
 
 #include <nlohmann/json.hpp>
@@ -300,6 +301,100 @@ bool parseDatabase(const std::string &text, Database &out, std::string &err) {
             d.traders.push_back(q.trader);
         d.quests.push_back(std::move(q));
     }
+    auto offers = [](const json &v) {
+        std::vector<GunOffer> out;
+        for (const auto &o : v.value("buy", json::array())) {
+            if (!o.is_array() || o.size() < 3)
+                continue;
+            GunOffer g;
+            g.trader = o[0].is_string() ? o[0].get<std::string>() : "";
+            g.level = o[1].is_number() ? o[1].get<int>() : 1;
+            g.price = o[2].is_number() ? o[2].get<int>() : 0;
+            if (o.size() > 3 && o[3].is_string())
+                g.quest = o[3].get<std::string>();
+            out.push_back(g);
+        }
+        return out;
+    };
+    auto slots = [](const json &v) {
+        std::vector<GunSlot> out;
+        for (const auto &s : v.value("sl", json::array())) {
+            if (!s.is_array() || s.size() < 3)
+                continue;
+            GunSlot g;
+            g.name = s[0].is_string() ? s[0].get<std::string>() : "Slot";
+            g.required = s[1].is_number() && s[1].get<int>() != 0;
+            g.set = s[2].is_number() ? s[2].get<int>() : -1;
+            out.push_back(g);
+        }
+        return out;
+    };
+    std::function<std::vector<BuildNode>(const json &)> tree = [&](const json &v) {
+        std::vector<BuildNode> out;
+        if (!v.is_array())
+            return out;
+        for (const auto &n : v) {
+            if (!n.is_array() || n.size() < 2 || !n[1].is_string())
+                continue;
+            BuildNode b;
+            b.slot = n[0].is_number() ? n[0].get<int>() : 0;
+            b.mod = n[1].get<std::string>();
+            if (n.size() > 2)
+                b.kids = tree(n[2]);
+            out.push_back(std::move(b));
+        }
+        return out;
+    };
+    const json guns = j.value("guns", json::object());
+    for (const auto &s : guns.value("sets", json::array())) {
+        std::vector<std::string> ids;
+        for (const auto &i : s)
+            if (i.is_string())
+                ids.push_back(i.get<std::string>());
+        d.modSets.push_back(std::move(ids));
+    }
+    const json gunMods = guns.value("m", json::object());
+    for (auto &[id, v] : gunMods.items()) {
+        GunMod m;
+        m.ergo = v.value("e", 0.f);
+        m.recoil = v.value("r", 0.f);
+        m.accuracy = v.value("a", 0.f);
+        m.velocity = v.value("v", 0.f);
+        m.capacity = num(v, "cap");
+        m.sightRange = num(v, "sr");
+        if (v.contains("zm") && v["zm"].is_array() && v["zm"].size() == 2) {
+            m.zoomMin = v["zm"][0].is_number() ? v["zm"][0].get<float>() : 0;
+            m.zoomMax = v["zm"][1].is_number() ? v["zm"][1].get<float>() : 0;
+        }
+        for (const auto &c : v.value("cf", json::array()))
+            if (c.is_string())
+                m.conflicts.push_back(c.get<std::string>());
+        m.buy = offers(v);
+        m.slots = slots(v);
+        d.mods.emplace(id, std::move(m));
+    }
+    for (const auto &v : guns.value("w", json::array())) {
+        Gun g;
+        g.id = str(v, "i");
+        g.caliber = str(v, "cal");
+        g.img = str(v, "img");
+        g.ergo = num(v, "e");
+        g.recoilV = num(v, "rv");
+        g.recoilH = num(v, "rh");
+        g.fireRate = num(v, "fr");
+        g.sightRange = num(v, "sr");
+        g.buy = offers(v);
+        g.slots = slots(v);
+        g.def = tree(v.value("d", json::array()));
+        if (v.contains("pre") && v["pre"].is_array() && v["pre"].size() == 3) {
+            g.hasPreset = true;
+            g.presetErgo = v["pre"][0].is_number() ? (int)v["pre"][0].get<float>() : 0;
+            g.presetRecoilV = v["pre"][1].is_number() ? (int)v["pre"][1].get<float>() : 0;
+            g.presetRecoilH = v["pre"][2].is_number() ? (int)v["pre"][2].get<float>() : 0;
+        }
+        if (!g.id.empty())
+            d.guns.push_back(std::move(g));
+    }
     // Portraits, listed in the game's trader order (newer data only).
     std::vector<std::string> order;
     for (const auto &t : j.value("traders", json::array())) {
@@ -372,6 +467,11 @@ bool loadState(const std::string &path, State &st) {
             st.tasksLocal.insert(t.get<std::string>());
     st.playerLevel = num(j, "playerLevel");
     st.faction = str(j, "faction");
+    st.gunBuilds.clear();
+    const json builds = j.value("gunBuilds", json::object());
+    for (auto &[k, v] : builds.items())
+        if (v.is_string())
+            st.gunBuilds[k] = v.get<std::string>();
     st.kappaFound.clear();
     for (const auto &k : j.value("kappaFound", json::array()))
         if (k.is_string())
@@ -415,6 +515,7 @@ bool saveState(const std::string &path, const State &st) {
     j["playerLevel"] = st.playerLevel;
     j["faction"] = st.faction;
     j["kappaFound"] = st.kappaFound;
+    j["gunBuilds"] = st.gunBuilds;
     json mods = json::object();
     for (auto &[k, v] : st.modules)
         if (v)
@@ -696,4 +797,51 @@ std::string formatDuration(int64_t s) {
     else
         snprintf(buf, sizeof buf, "%llds", (long long)sec);
     return buf;
+}
+
+// "slot:mod(children);slot:mod" -- compact enough for state.json.
+std::string encodeBuild(const std::vector<BuildNode> &nodes) {
+    std::string out;
+    for (const auto &n : nodes) {
+        if (!out.empty())
+            out += ';';
+        out += std::to_string(n.slot) + ':' + n.mod;
+        if (!n.kids.empty())
+            out += '(' + encodeBuild(n.kids) + ')';
+    }
+    return out;
+}
+
+static std::vector<BuildNode> decodeNodes(const std::string &s, size_t &i, int depth) {
+    std::vector<BuildNode> out;
+    while (i < s.size() && s[i] != ')') {
+        BuildNode n;
+        size_t colon = s.find(':', i);
+        if (colon == std::string::npos)
+            break;
+        n.slot = atoi(s.substr(i, colon - i).c_str());
+        i = colon + 1;
+        size_t end = s.find_first_of(";()", i);
+        if (end == std::string::npos)
+            end = s.size();
+        n.mod = s.substr(i, end - i);
+        i = end;
+        if (i < s.size() && s[i] == '(') {
+            i++;
+            if (depth < 16)
+                n.kids = decodeNodes(s, i, depth + 1);
+            if (i < s.size() && s[i] == ')')
+                i++;
+        }
+        if (!n.mod.empty())
+            out.push_back(std::move(n));
+        if (i < s.size() && s[i] == ';')
+            i++;
+    }
+    return out;
+}
+
+std::vector<BuildNode> decodeBuild(const std::string &s) {
+    size_t i = 0;
+    return decodeNodes(s, i, 0);
 }
